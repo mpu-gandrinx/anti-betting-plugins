@@ -20,25 +20,58 @@ class AJS_AI {
         return $this->enabled && !empty($this->endpoint) && !empty($this->api_key);
     }
 
+    public function get_endpoint(): string {
+        return $this->endpoint;
+    }
+
+    public function get_model(): string {
+        return $this->model;
+    }
+
+    public function is_enabled(): bool {
+        return $this->enabled;
+    }
+
+    public function get_system_prompt(): string {
+        return "Anda analis keamanan siber spesialis penanganan peretasan situs judi online (judol) dan SEO spam WordPress di Indonesia. " .
+               "Periksa teks atau kode yang diberikan. Tentukan apakah memuat: " .
+               "1. Kata kunci/promosi terselubung judi online (slot, gacor, maxwin, togel, kasino, link alternatif, dll). " .
+               "2. Backdoor/webshell atau payload berbahaya (eval, base64 obfuscation, skrip redirect ke bandar judi). " .
+               "Jawab HANYA dalam format JSON valid tanpa format markdown: {\"is_threat\": true|false, \"reason\": \"penjelasan ringkas maks 15 kata\"}";
+    }
+
     public function inspect_content(string $content): array {
+        $system_prompt = $this->get_system_prompt();
+
         if (!$this->is_configured() || empty(trim($content))) {
-            return ['is_threat' => false, 'reason' => 'AI nonaktif'];
+            return [
+                'is_threat'     => false,
+                'reason'        => 'AI nonaktif atau konten kosong',
+                'system_prompt' => $system_prompt,
+                'user_prompt'   => '',
+                'model'         => $this->model,
+                'endpoint'      => $this->endpoint,
+                'raw_reply'     => '',
+                'sample_length' => 0,
+            ];
         }
 
-        $sample = substr($content, 0, 2500);
-
-        $system_prompt = "Anda analis keamanan siber spesialis penanganan peretasan situs judi online (judol) dan SEO spam WordPress di Indonesia. " .
-                         "Periksa teks atau kode yang diberikan. Tentukan apakah memuat: " .
-                         "1. Kata kunci/promosi terselubung judi online (slot, gacor, maxwin, togel, kasino, link alternatif, dll). " .
-                         "2. Backdoor/webshell atau payload berbahaya (eval, base64 obfuscation, skrip redirect ke bandar judi). " .
-                         "Jawab HANYA dalam format JSON valid tanpa format markdown: {\"is_threat\": true|false, \"reason\": \"penjelasan ringkas maks 15 kata\"}";
+        $sample      = substr($content, 0, 2500);
+        $user_prompt = "Periksa konten berikut:\n\n" . $sample;
 
         $messages = [
             ['role' => 'system', 'content' => $system_prompt],
-            ['role' => 'user', 'content' => "Periksa konten berikut:\n\n" . $sample]
+            ['role' => 'user', 'content' => $user_prompt]
         ];
 
-        return $this->call_completion($messages);
+        $result = $this->call_completion($messages);
+        $result['system_prompt'] = $system_prompt;
+        $result['user_prompt']   = $user_prompt;
+        $result['model']         = $this->model;
+        $result['endpoint']      = $this->endpoint;
+        $result['sample_length'] = strlen($sample);
+
+        return $result;
     }
 
     public function test_connection(): array {
@@ -67,7 +100,11 @@ class AJS_AI {
     private function call_completion(array $messages): array {
         $response = $this->raw_request($messages, 150);
         if (is_wp_error($response)) {
-            return ['is_threat' => false, 'reason' => 'AI Error: ' . $response->get_error_message()];
+            return [
+                'is_threat' => false,
+                'reason'    => 'AI Error: ' . $response->get_error_message(),
+                'raw_reply' => '',
+            ];
         }
 
         $body = wp_remote_retrieve_body($response);
@@ -80,11 +117,16 @@ class AJS_AI {
         if (is_array($parsed) && isset($parsed['is_threat'])) {
             return [
                 'is_threat' => (bool)$parsed['is_threat'],
-                'reason'    => (string)($parsed['reason'] ?? 'AI Threat Detected')
+                'reason'    => (string)($parsed['reason'] ?? 'AI Threat Detected'),
+                'raw_reply' => $clean_json,
             ];
         }
 
-        return ['is_threat' => false, 'reason' => 'Invalid AI Response'];
+        return [
+            'is_threat' => false,
+            'reason'    => 'Invalid AI Response',
+            'raw_reply' => substr($reply, 0, 300),
+        ];
     }
 
     private function raw_request(array $messages, int $max_tokens = 150) {

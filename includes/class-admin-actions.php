@@ -33,6 +33,7 @@ class AJS_Admin_Actions {
         add_action('admin_post_ajs_manual_ban_ip', [$this, 'handle_manual_ban_ip']);
         add_action('admin_post_ajs_deploy_cf', [$this, 'handle_deploy_cf']);
         add_action('admin_post_ajs_test_alert', [$this, 'handle_test_alert']);
+        add_action('admin_post_ajs_export_scan_report', [$this, 'handle_export_scan_report']);
     }
 
     public function handle_manual_scan(): void {
@@ -251,6 +252,27 @@ class AJS_Admin_Actions {
 
         set_transient('ajs_alert_test_notice', 1, 60);
         wp_safe_redirect(add_query_arg(['page' => 'anti-judol-integrations', 'alert_tested' => 1], admin_url('admin.php')));
+        exit;
+    }
+
+    public function handle_export_scan_report(): void {
+        check_admin_referer('ajs_export_scan_report_action');
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Akses ditolak.', 'anti-judol-shield'));
+        }
+
+        $last_scan = get_option('ajs_last_scan_result', null);
+        if (!$last_scan) {
+            wp_die(__('Belum ada data laporan pemindaian untuk diekspor.', 'anti-judol-shield'));
+        }
+
+        $filename = 'ajs-security-scan-report-' . gmdate('Ymd-His') . '.json';
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+
+        echo wp_json_encode($last_scan, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
     }
 }

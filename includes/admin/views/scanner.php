@@ -355,49 +355,7 @@ if (isset($_GET['settings_saved'])) {
     </div>
 
     <?php if ($last_scan) : ?>
-        <div style="background: #fff; padding: 20px; border: 1px solid #cbd5e1; margin-bottom: 20px;">
-            <h3>Hasil Pemindaian Terakhir (<?php echo esc_html($last_scan['timestamp']); ?>)</h3>
-            <p>Total temuan: <strong><?php echo esc_html($last_scan['total_issues']); ?></strong></p>
-
-            <?php if (!empty($last_scan['skipped_paths'])) : ?>
-                <div style="background: #f0fdf4; border: 1px solid #86efac; border-left: 4px solid #22c55e; padding: 12px 16px; margin-bottom: 16px; border-radius: 4px;">
-                    <strong style="color: #15803d;">⚡ Optimalisasi Server Lokal &mdash; Direktori yang Dilewati (NFS / Pengecualian):</strong>
-                    <ul style="margin: 8px 0 4px 20px; font-size: 13px; color: #166534;">
-                        <?php foreach ($last_scan['skipped_paths'] as $sp) : ?>
-                            <li><code><?php echo esc_html($sp['path']); ?></code> &mdash; <em><?php echo esc_html($sp['reason']); ?></em></li>
-                        <?php endforeach; ?>
-                    </ul>
-                    <p style="margin: 6px 0 0 0; font-size: 12px; color: #15803d;">Direktori jaringan di atas tidak dipindai untuk menghemat I/O dan menjaga proses selesai cepat.</p>
-                </div>
-            <?php endif; ?>
-
-            <?php if (empty($last_scan['findings'])) : ?>
-                <div class="notice notice-success inline" style="margin: 0;"><p>✅ <strong>Aman:</strong> Tidak ditemukan backdoor atau file executable ilegal di folder lokal server.</p></div>
-            <?php else : ?>
-                <table class="widefat fixed striped">
-                    <thead>
-                        <tr>
-                            <th style="width: 100px;">Tingkat</th>
-                            <th>Lokasi File</th>
-                            <th>Detail Masalah</th>
-                            <th style="width: 120px;">Status Karantina</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($last_scan['findings'] as $f) : ?>
-                            <tr>
-                                <td><span style="color:#dc2626;font-weight:bold;"><?php echo esc_html($f['severity']); ?></span></td>
-                                <td style="word-break: break-all;"><code><?php echo esc_html($f['file']); ?></code></td>
-                                <td><?php echo esc_html($f['message']); ?></td>
-                                <td>
-                                    <?php echo !empty($f['healed']) ? '<span style="color:#16a34a;font-weight:bold;">Terkarantina</span>' : '<span style="color:#ea580c;">Belum Dikarantina</span>'; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php endif; ?>
-        </div>
+        <?php include __DIR__ . '/scan-report.php'; ?>
     <?php endif; ?>
 
     <div style="background: #f8fafc; padding: 20px; border: 1px solid #e2e8f0;">

@@ -194,6 +194,45 @@ foreach ($ai_audit as $item) {
                 </div>
             </div>
 
+            <!-- Box Progress & Terminal Console Log Remediasi Real-Time -->
+            <div id="ajs-remediation-box" style="display: none; margin-bottom: 20px; background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #2563eb; padding: 18px 20px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                    <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; color: #1e293b; font-size: 15px;">
+                        <span id="ajs-rem-spinner" class="dashicons dashicons-update ajs-spin" style="color: #2563eb; font-size: 20px; width: 20px; height: 20px;"></span>
+                        <span id="ajs-rem-title"><?php esc_html_e('Proses Remediasi & Analisis AI Sedang Berjalan...', 'anti-judol-shield'); ?></span>
+                    </h4>
+                    <span id="ajs-rem-percent" style="background: #dbeafe; color: #1e40af; padding: 2px 10px; border-radius: 9999px; font-weight: bold; font-size: 12px;">0%</span>
+                </div>
+
+                <!-- Progress Bar -->
+                <div style="background: #e2e8f0; border-radius: 9999px; height: 20px; overflow: hidden; position: relative; margin-bottom: 12px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);">
+                    <div id="ajs-rem-bar" style="background: linear-gradient(90deg, #2563eb, #3b82f6); height: 100%; width: 0%; transition: width 0.35s ease; border-radius: 9999px; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; color: #fff; font-weight: bold; font-size: 11px; min-width: 24px;">0%</div>
+                </div>
+
+                <div id="ajs-rem-status" style="font-weight: 600; color: #334155; font-size: 13px; margin-bottom: 12px;">
+                    <?php esc_html_e('Menyiapkan antrian temuan untuk dianalisis model AI...', 'anti-judol-shield'); ?>
+                </div>
+
+                <!-- Console Log Window -->
+                <div style="margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                        <span style="font-size: 12px; font-weight: 600; color: #475569;"><?php esc_html_e('Live Console Log Eksekusi Remediasi:', 'anti-judol-shield'); ?></span>
+                        <span style="font-size: 11px; color: #64748b;">(Auto-scroll aktif &bull; log transparan)</span>
+                    </div>
+                    <div id="ajs-rem-console" style="background: #0f172a; color: #38bdf8; font-family: Consolas, Monaco, 'Courier New', monospace; font-size: 12px; padding: 12px 14px; border-radius: 6px; height: 180px; overflow-y: auto; line-height: 1.6; border: 1px solid #1e293b; box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);">
+                        <div>[<?php echo esc_html(current_time('H:i:s')); ?>] Konsol remediasi siap dimulai...</div>
+                    </div>
+                </div>
+
+                <!-- Metric Counters -->
+                <div style="display: flex; flex-wrap: wrap; gap: 20px; font-size: 12.5px; color: #334155; padding-top: 10px; border-top: 1px solid #e2e8f0;">
+                    <div>Diproses: <strong id="ajs-stat-total" style="color: #2563eb;">0</strong></div>
+                    <div>Dinyatakan Sah (Whitelist): <strong id="ajs-stat-whitelist" style="color: #16a34a;">0</strong></div>
+                    <div>Dikarantina / Backdoor: <strong id="ajs-stat-quarantine" style="color: #ea580c;">0</strong></div>
+                    <div>Database Diperbaiki: <strong id="ajs-stat-db" style="color: #9333ea;">0</strong></div>
+                </div>
+            </div>
+
             <table class="widefat fixed striped">
                 <thead>
                     <tr>
@@ -610,6 +649,37 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Helper function for timestamp in remediation console
+    function getRemTime() {
+        var now = new Date();
+        return ('0' + now.getHours()).slice(-2) + ':' +
+               ('0' + now.getMinutes()).slice(-2) + ':' +
+               ('0' + now.getSeconds()).slice(-2);
+    }
+
+    var remConsole = document.getElementById('ajs-rem-console');
+    function appendRemLog(msg, color) {
+        if (!remConsole) return;
+        var line = document.createElement('div');
+        if (color) line.style.color = color;
+        line.textContent = '[' + getRemTime() + '] ' + msg;
+        remConsole.appendChild(line);
+        remConsole.scrollTop = remConsole.scrollHeight;
+    }
+
+    var remBox = document.getElementById('ajs-remediation-box');
+    var remBar = document.getElementById('ajs-rem-bar');
+    var remPercent = document.getElementById('ajs-rem-percent');
+    var remStatus = document.getElementById('ajs-rem-status');
+    var remSpinner = document.getElementById('ajs-rem-spinner');
+    var remTitle = document.getElementById('ajs-rem-title');
+    var statTotal = document.getElementById('ajs-stat-total');
+    var statWhitelist = document.getElementById('ajs-stat-whitelist');
+    var statQuarantine = document.getElementById('ajs-stat-quarantine');
+    var statDb = document.getElementById('ajs-stat-db');
+
+    var countTotal = 0, countWhitelist = 0, countQuarantine = 0, countDb = 0;
+
     // Remediasi Individual Finding
     var ajaxUrl = <?php echo json_encode(admin_url('admin-ajax.php')); ?>;
     var ajaxNonce = <?php echo json_encode(wp_create_nonce('ajs_ajax_scan_nonce')); ?>;
@@ -621,9 +691,17 @@ document.addEventListener('DOMContentLoaded', function() {
             var type = this.getAttribute('data-type');
             var mode = this.getAttribute('data-mode') || 'ai_auto';
             var cell = this.closest('.ajs-remediate-cell');
-            var originalHtml = cell.innerHTML;
+            var originalHtml = cell ? cell.innerHTML : '';
 
-            cell.innerHTML = '<span style="color:#2563eb; font-size:12px; display:inline-flex; align-items:center; gap:4px;"><span class="dashicons dashicons-update ajs-spin"></span> Memproses Remediasi AI...</span>';
+            if (remBox) {
+                remBox.style.display = 'block';
+                remBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+
+            appendRemLog('Memulai tindakan (' + mode + ') pada: ' + file, '#38bdf8');
+            if (cell) {
+                cell.innerHTML = '<span style="color:#2563eb; font-size:12px; display:inline-flex; align-items:center; gap:4px;"><span class="dashicons dashicons-update ajs-spin"></span> Memproses Remediasi AI...</span>';
+            }
 
             var formData = new FormData();
             formData.append('action', 'ajs_remediate_finding');
@@ -642,49 +720,193 @@ document.addEventListener('DOMContentLoaded', function() {
                     throw new Error(res.data && res.data.message ? res.data.message : 'Gagal remediasi.');
                 }
                 var data = res.data;
-                var badge = data.badge_text || 'Selesai / Terkarantina';
+                var badge = data.badge_text || 'Selesai';
                 var msg = data.message || '';
-                cell.innerHTML = '<span style="color:#16a34a; font-weight:bold; font-size:12px; display:inline-flex; align-items:center; gap:4px;" title="' + msg.replace(/"/g, '&quot;') + '"><span class="dashicons dashicons-yes"></span> ' + badge + '</span><div style="font-size:11.5px; color:#475569; margin-top:2px;">' + msg + '</div>';
+                var act = data.action || '';
+
+                if (act === 'whitelisted') {
+                    countWhitelist++;
+                    if (statWhitelist) statWhitelist.textContent = countWhitelist;
+                    appendRemLog('--> [DITANDAI SAH] ' + badge + ': ' + msg, '#86efac');
+                } else if (act === 'quarantined') {
+                    countQuarantine++;
+                    if (statQuarantine) statQuarantine.textContent = countQuarantine;
+                    appendRemLog('--> [DIKARANTINA] ' + badge + ': ' + msg, '#fca5a5');
+                } else if (act === 'db_fixed' || act === 'user_demoted' || act === 'option_deleted') {
+                    countDb++;
+                    if (statDb) statDb.textContent = countDb;
+                    appendRemLog('--> [DATABASE] ' + badge + ': ' + msg, '#c084fc');
+                } else {
+                    appendRemLog('--> [BERHASIL] ' + badge + ': ' + msg, '#38bdf8');
+                }
+
+                countTotal++;
+                if (statTotal) statTotal.textContent = countTotal;
+
+                if (cell) {
+                    cell.innerHTML = '<span style="color:#16a34a; font-weight:bold; font-size:12px; display:inline-flex; align-items:center; gap:4px;" title="' + msg.replace(/"/g, '&quot;') + '"><span class="dashicons dashicons-yes"></span> ' + badge + '</span><div style="font-size:11.5px; color:#475569; margin-top:2px;">' + msg + '</div>';
+                }
             })
             .catch(function(err) {
-                cell.innerHTML = '<span style="color:#dc2626; font-size:12px;">Gagal: ' + err.message + '</span><br>' + originalHtml;
+                appendRemLog('--> GAGAL: ' + err.message, '#ef4444');
+                if (cell) {
+                    cell.innerHTML = '<span style="color:#dc2626; font-size:12px;">Gagal: ' + err.message + '</span><br>' + originalHtml;
+                }
             });
         });
     });
 
-    // Batch Remediation (Auto-Fix Semua Temuan dengan AI)
+    // Batch Remediation (Auto-Fix Semua Temuan dengan AI secara berurutan + live console log)
     var batchBtn = document.getElementById('ajs-btn-batch-fix');
     if (batchBtn) {
         batchBtn.addEventListener('click', function(e) {
             e.preventDefault();
-            if (!confirm('Jalankan Remediasi AI pada seluruh temuan yang belum diselesaikan?\n\nAI akan secara otomatis membedakan kode sah plugin (WooCommerce, LearnPress, dll) vs backdoor peretas, lalu menetralkan atau mengarantina otomatis.')) {
+
+            var unhealedButtons = Array.from(document.querySelectorAll('.ajs-btn-remediate-single[data-mode="ai_auto"]'));
+            if (!unhealedButtons.length) {
+                alert('Seluruh temuan keamanan telah berhasil ditangani!');
+                return;
+            }
+
+            if (!confirm('Jalankan Remediasi AI pada ' + unhealedButtons.length + ' temuan keamanan?\n\nAI akan memeriksa setiap file secara transparan, membedakan kode sah vs backdoor peretas, lalu menetralkan atau mengarantina otomatis.')) {
                 return;
             }
 
             batchBtn.disabled = true;
-            batchBtn.innerHTML = '<span class="dashicons dashicons-update ajs-spin" style="margin-top:2px;"></span> Sedang Menganalisis & Memperbaiki dengan AI...';
+            batchBtn.innerHTML = '<span class="dashicons dashicons-update ajs-spin" style="margin-top:2px;"></span> Remediasi AI Sedang Berjalan...';
 
-            var formData = new FormData();
-            formData.append('action', 'ajs_batch_remediate');
-            formData.append('nonce', ajaxNonce);
+            if (remBox) {
+                remBox.style.display = 'block';
+                remBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
 
-            fetch(ajaxUrl, {
-                method: 'POST',
-                body: formData
-            })
-            .then(function(res) { return res.json(); })
-            .then(function(res) {
-                if (!res.success) {
-                    throw new Error(res.data && res.data.message ? res.data.message : 'Gagal batch remediasi.');
+            if (remConsole) {
+                remConsole.innerHTML = '';
+            }
+
+            appendRemLog('Memulai batch remediasi AI untuk ' + unhealedButtons.length + ' temuan...', '#38bdf8');
+
+            var total = unhealedButtons.length;
+            countTotal = 0; countWhitelist = 0; countQuarantine = 0; countDb = 0;
+            if (statTotal) statTotal.textContent = '0';
+            if (statWhitelist) statWhitelist.textContent = '0';
+            if (statQuarantine) statQuarantine.textContent = '0';
+            if (statDb) statDb.textContent = '0';
+
+            function processIndex(index) {
+                if (index >= total) {
+                    // Selesai seluruhnya
+                    if (remBar) {
+                        remBar.style.width = '100%';
+                        remBar.textContent = '100%';
+                        remBar.style.background = '#16a34a';
+                    }
+                    if (remPercent) {
+                        remPercent.textContent = '100%';
+                        remPercent.style.background = '#dcfce7';
+                        remPercent.style.color = '#15803d';
+                    }
+                    if (remSpinner) {
+                        remSpinner.className = 'dashicons dashicons-yes-alt';
+                        remSpinner.style.color = '#16a34a';
+                    }
+                    if (remTitle) {
+                        remTitle.textContent = '✅ Remediasi AI Berhasil Selesai!';
+                    }
+                    if (remStatus) {
+                        remStatus.innerHTML = '<span style="color:#16a34a; font-weight:bold;">Seluruh ' + total + ' temuan berhasil diremediasi dan diamankan.</span>';
+                    }
+                    appendRemLog('====================================================', '#64748b');
+                    appendRemLog('HASIL AKHIR: ' + countWhitelist + ' dinyatakan sah (whitelist), ' + countQuarantine + ' dikarantina, ' + countDb + ' celah database diperbaiki.', '#4ade80');
+                    appendRemLog('Memuat ulang halaman dalam 2 detik untuk memperbarui laporan resmi...', '#38bdf8');
+
+                    setTimeout(function() {
+                        window.location.reload();
+                    }, 2500);
+                    return;
                 }
-                alert(res.data.message);
-                window.location.reload();
-            })
-            .catch(function(err) {
-                alert('Terjadi kendala: ' + err.message);
-                batchBtn.disabled = false;
-                batchBtn.innerHTML = '<span class="dashicons dashicons-superhero" style="margin-top: 1px;"></span> Remediasi Otomatis Semua Temuan dengan AI';
-            });
+
+                var btn = unhealedButtons[index];
+                var file = btn.getAttribute('data-file');
+                var type = btn.getAttribute('data-type');
+                var cell = btn.closest('.ajs-remediate-cell');
+                var num = index + 1;
+
+                var pct = Math.round((index / total) * 100);
+                if (remBar) {
+                    remBar.style.width = pct + '%';
+                    remBar.textContent = pct + '%';
+                }
+                if (remPercent) {
+                    remPercent.textContent = pct + '%';
+                }
+                if (remStatus) {
+                    remStatus.textContent = '[' + num + '/' + total + '] Memeriksa: ' + file;
+                }
+
+                appendRemLog('[' + num + '/' + total + '] Analisis AI: ' + file, '#f8fafc');
+
+                if (cell) {
+                    cell.innerHTML = '<span style="color:#2563eb; font-size:12px; display:inline-flex; align-items:center; gap:4px;"><span class="dashicons dashicons-update ajs-spin"></span> Menganalisis dengan AI...</span>';
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'ajs_remediate_finding');
+                formData.append('nonce', ajaxNonce);
+                formData.append('finding_file', file);
+                formData.append('finding_type', type);
+                formData.append('remediation_mode', 'ai_auto');
+
+                fetch(ajaxUrl, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(res) {
+                    if (res.success) {
+                        var d = res.data;
+                        var badge = d.badge_text || 'Selesai';
+                        var msg = d.message || '';
+                        var act = d.action || '';
+
+                        if (act === 'whitelisted') {
+                            countWhitelist++;
+                            if (statWhitelist) statWhitelist.textContent = countWhitelist;
+                            appendRemLog('  -> [SAH] ' + badge + ': ' + msg, '#86efac');
+                        } else if (act === 'quarantined') {
+                            countQuarantine++;
+                            if (statQuarantine) statQuarantine.textContent = countQuarantine;
+                            appendRemLog('  -> [KARANTINA] ' + badge + ': ' + msg, '#fca5a5');
+                        } else if (act === 'db_fixed' || act === 'user_demoted' || act === 'option_deleted') {
+                            countDb++;
+                            if (statDb) statDb.textContent = countDb;
+                            appendRemLog('  -> [DATABASE] ' + badge + ': ' + msg, '#c084fc');
+                        } else {
+                            appendRemLog('  -> ' + badge + ': ' + msg, '#38bdf8');
+                        }
+
+                        countTotal++;
+                        if (statTotal) statTotal.textContent = countTotal;
+
+                        if (cell) {
+                            cell.innerHTML = '<span style="color:#16a34a; font-weight:bold; font-size:12px; display:inline-flex; align-items:center; gap:4px;" title="' + msg.replace(/"/g, '&quot;') + '"><span class="dashicons dashicons-yes"></span> ' + badge + '</span><div style="font-size:11.5px; color:#475569; margin-top:2px;">' + msg + '</div>';
+                        }
+                    } else {
+                        appendRemLog('  -> GAGAL: ' + (res.data ? res.data.message : 'Error remediasi'), '#ef4444');
+                        if (cell) {
+                            cell.innerHTML = '<span style="color:#dc2626; font-size:12px;">Gagal: ' + (res.data ? res.data.message : 'Error') + '</span>';
+                        }
+                    }
+
+                    processIndex(index + 1);
+                })
+                .catch(function(err) {
+                    appendRemLog('  -> ERROR JARINGAN: ' + err.message, '#ef4444');
+                    processIndex(index + 1);
+                });
+            }
+
+            processIndex(0);
         });
     }
 });

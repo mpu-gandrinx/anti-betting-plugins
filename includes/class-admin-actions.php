@@ -294,6 +294,7 @@ class AJS_Admin_Actions {
 
         $result = $this->execute_remediation($target_file, $threat_type, $force_action);
         $this->update_finding_record($target_file, $result);
+        $this->log_remediation_event($target_file, $result['badge_text'] ?? ($result['action'] ?? 'Remediasi'), $result['message'] ?? '');
 
         if ($result['success']) {
             wp_send_json_success($result);
@@ -366,6 +367,18 @@ class AJS_Admin_Actions {
                 'action'     => 'option_deleted',
                 'badge_text' => 'Opsi Dihapus',
                 'message'    => "Opsi database '{$opt_raw}' berhasil dihapus dari tabel wp_options.",
+            ];
+        }
+
+        // 1b. WP Cron Hook Jahat
+        if (strpos($target, 'WP Cron Hook:') === 0 || $threat_type === 'malicious_cron_job') {
+            $hook_name = trim(str_replace('WP Cron Hook:', '', $target));
+            wp_clear_scheduled_hook($hook_name);
+            return [
+                'success'    => true,
+                'action'     => 'cron_cleared',
+                'badge_text' => 'Cron Ilegal Dihapus',
+                'message'    => "Tugas cron jahat '{$hook_name}' berhasil dihapus dari jadwal sistem WP-Cron.",
             ];
         }
 
@@ -571,5 +584,19 @@ class AJS_Admin_Actions {
             $last_scan['findings']     = $findings;
             update_option('ajs_last_scan_result', $last_scan);
         }
+    }
+
+    private function log_remediation_event(string $target, string $action, string $details): void {
+        global $wpdb;
+        $table = $wpdb->prefix . 'ajs_security_logs';
+        $ip = !empty($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : '127.0.0.1';
+        $wpdb->insert($table, [
+            'ip_address'     => $ip,
+            'reason'         => 'Remediasi: ' . $action,
+            'threat_payload' => substr($details, 0, 1000),
+            'request_uri'    => wp_make_link_relative($target),
+            'user_agent'     => 'AJS Remediation Engine',
+            'created_at'     => current_time('mysql'),
+        ]);
     }
 }

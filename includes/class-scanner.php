@@ -19,6 +19,9 @@ class AJS_Scanner {
         'IndoXploit',
         'b374k',
         'p0wny',
+        'wp_vcd',
+        'menuhdr',
+        'wp-tmp.php',
 
         // Remote Execution & Dangerous Obfuscation
         'eval(base64_decode',
@@ -46,6 +49,10 @@ class AJS_Scanner {
         'call_user_func($_POST',
         'call_user_func($_GET',
         'call_user_func($_REQUEST',
+        'include "data://',
+        'include \'data://',
+        'base64_decode("PD9waH',
+        'base64_decode(\'PD9waH',
     ];
 
     private array $official_root_files = [
@@ -786,6 +793,48 @@ class AJS_Scanner {
 
         // Audit Akun Administrator di wp_users
         $this->audit_administrator_accounts($findings, $db_audit);
+
+        // Audit Tugas Cron Terjadwal (WP-Cron) untuk Persistensi Backdoor
+        $this->audit_cron_jobs($findings, $db_audit);
+    }
+
+    public function audit_cron_jobs(array &$findings, array &$db_audit = []): void {
+        $crons = _get_cron_array();
+        if (empty($crons) || !is_array($crons)) {
+            $db_audit[] = [
+                'pattern' => 'Audit Tugas Cron Terjadwal (WP-Cron)',
+                'matched' => [],
+            ];
+            return;
+        }
+
+        $suspicious_hooks = [];
+        foreach ($crons as $timestamp => $hooks) {
+            if (!is_array($hooks)) {
+                continue;
+            }
+            foreach ($hooks as $hook_name => $hook_events) {
+                $h_lower = strtolower((string)$hook_name);
+                if (preg_match('/^(wp_[a-z0-9]{12,}|eval_|shell_|backdoor_|update_user_role_|exec_)/i', (string)$hook_name) ||
+                    strpos($h_lower, 'base64') !== false ||
+                    strpos($h_lower, 'wp_vcd') !== false ||
+                    strpos($h_lower, 'menuhdr') !== false) {
+                    $suspicious_hooks[] = (string)$hook_name;
+                    $findings[] = [
+                        'type'     => 'malicious_cron_job',
+                        'severity' => 'CRITICAL',
+                        'file'     => "WP Cron Hook: {$hook_name}",
+                        'message'  => "Terdeteksi tugas cron terjadwal mencurigakan ({$hook_name}). Peretas sering menggunakan cron untuk terus membuat ulang akun admin.",
+                        'healed'   => false,
+                    ];
+                }
+            }
+        }
+
+        $db_audit[] = [
+            'pattern' => 'Audit Tugas Cron Terjadwal (WP-Cron)',
+            'matched' => $suspicious_hooks ?: [],
+        ];
     }
 
     public function audit_user_registration_settings(array &$findings, array &$db_audit = []): void {
@@ -919,6 +968,32 @@ class AJS_Scanner {
                     'message'  => 'Integritas file resmi WordPress gagal (Official MD5 mismatch: file core WordPress telah dimodifikasi oleh peretas).',
                     'healed'   => false,
                 ];
+            }
+        }
+
+        // Deteksi file .php liar/asing di direktori wp-includes/ yang tidak ada dalam checksums resmi
+        $inc_dir = ABSPATH . (defined('WPINC') ? WPINC : 'wp-includes');
+        if (is_dir($inc_dir)) {
+            $extra_files = @glob($inc_dir . '/*.php');
+            if ($extra_files) {
+                foreach ($extra_files as $ef) {
+                    $rel_path = 'wp-includes/' . basename($ef);
+                    if (!isset($checksums[$rel_path])) {
+                        $findings[] = [
+                            'type'     => 'rogue_core_file',
+                            'severity' => 'CRITICAL',
+                            'file'     => $ef,
+                            'message'  => 'Ditemukan file skrip asing di direktori wp-includes! File ini bukan bagian resmi WordPress (berpotensi kuat backdoor tersembunyi seperti wp-vcd/fake core).',
+                            'healed'   => false,
+                        ];
+                        $core_audit[] = [
+                            'file'      => $rel_path,
+                            'status'    => 'rogue_file',
+                            'local_md5' => md5_file($ef) ?: '-',
+                            'wp_md5'    => 'TIDAK TERDAFTAR (ILEGAL)',
+                        ];
+                    }
+                }
             }
         }
     }

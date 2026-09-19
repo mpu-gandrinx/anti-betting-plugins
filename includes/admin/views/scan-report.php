@@ -179,18 +179,36 @@ foreach ($ai_audit as $item) {
                 </p>
             </div>
         <?php else : ?>
+            <!-- Toolbar Remediasi Cepat AI -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 6px;">
+                <div>
+                    <strong style="color: #1e40af; font-size: 13.5px;">⚡ Asisten Remediasi & Auto-Fix Keamanan AI:</strong>
+                    <div style="font-size: 12.5px; color: #3b82f6; margin-top: 2px;">
+                        Gunakan tombol di bawah untuk meminta AI membedakan fungsi sah plugin (seperti WooCommerce/LearnPress) vs backdoor peretas, lalu menetralkan atau mengarantina otomatis.
+                    </div>
+                </div>
+                <div class="ajs-no-print">
+                    <button type="button" id="ajs-btn-batch-fix" class="button button-primary button-large" style="background: #2563eb; border-color: #1d4ed8; font-weight: bold; display: inline-flex; align-items: center; gap: 6px;">
+                        <span class="dashicons dashicons-superhero" style="font-size: 18px; width: 18px; height: 18px; margin-top: 1px;"></span> <?php esc_html_e('Remediasi Otomatis Semua Temuan dengan AI', 'anti-judol-shield'); ?>
+                    </button>
+                </div>
+            </div>
+
             <table class="widefat fixed striped">
                 <thead>
                     <tr>
-                        <th style="width: 110px;">Tingkat</th>
-                        <th style="width: 160px;">Tipe Ancaman</th>
+                        <th style="width: 100px;">Tingkat</th>
+                        <th style="width: 150px;">Tipe Ancaman</th>
                         <th>Lokasi / Target File</th>
                         <th>Detail Analisis</th>
-                        <th style="width: 140px;">Status Karantina</th>
+                        <th style="width: 250px;">Status & Aksi Remediasi</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($findings as $f) : ?>
+                    <?php foreach ($findings as $fidx => $f) : ?>
+                        <?php
+                        $is_file_target = (strpos($f['file'] ?? '', '/') !== false || strpos($f['file'] ?? '', '\\') !== false) && strpos($f['file'] ?? '', 'Database Option:') === false && strpos($f['file'] ?? '', 'User ID #') === false;
+                        ?>
                         <tr>
                             <td>
                                 <?php
@@ -205,15 +223,43 @@ foreach ($ai_audit as $item) {
                             <td><code><?php echo esc_html($f['type'] ?? 'threat'); ?></code></td>
                             <td style="word-break: break-all;"><code><?php echo esc_html($f['file'] ?? '-'); ?></code></td>
                             <td><?php echo esc_html($f['message'] ?? '-'); ?></td>
-                            <td>
+                            <td class="ajs-remediate-cell">
                                 <?php if (!empty($f['healed'])) : ?>
-                                    <span style="color:#16a34a; font-weight:bold; display: inline-flex; align-items: center; gap: 4px;">
-                                        <span class="dashicons dashicons-yes"></span> Terkarantina
+                                    <span style="color:#16a34a; font-weight:bold; display: inline-flex; align-items: center; gap: 4px; font-size: 12px;">
+                                        <span class="dashicons dashicons-yes"></span> <?php echo esc_html($f['remediation_note'] ?? 'Selesai / Terkarantina'); ?>
                                     </span>
                                 <?php else : ?>
-                                    <span style="color:#dc2626; font-weight:bold; display: inline-flex; align-items: center; gap: 4px;">
-                                        <span class="dashicons dashicons-warning"></span> Belum Karantina
-                                    </span>
+                                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                                        <span style="color:#dc2626; font-weight:bold; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;">
+                                            <span class="dashicons dashicons-warning"></span> Belum Ditangani
+                                        </span>
+                                        <div class="ajs-no-print" style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                            <button type="button" class="button button-small button-primary ajs-btn-remediate-single" 
+                                                    data-file="<?php echo esc_attr($f['file'] ?? ''); ?>" 
+                                                    data-type="<?php echo esc_attr($f['type'] ?? ''); ?>" 
+                                                    data-mode="ai_auto"
+                                                    title="Minta AI memeriksa apakah ini fungsi sah plugin atau backdoor dan selesaikan otomatis">
+                                                ⚡ Fix AI
+                                            </button>
+
+                                            <?php if ($is_file_target) : ?>
+                                                <button type="button" class="button button-small ajs-btn-remediate-single" 
+                                                        data-file="<?php echo esc_attr($f['file'] ?? ''); ?>" 
+                                                        data-type="<?php echo esc_attr($f['type'] ?? ''); ?>" 
+                                                        data-mode="quarantine"
+                                                        title="Karantina file ke ekstensi non-eksekusi (.quarantine_bak)">
+                                                    Karantina
+                                                </button>
+                                                <button type="button" class="button button-small ajs-btn-remediate-single" 
+                                                        data-file="<?php echo esc_attr($f['file'] ?? ''); ?>" 
+                                                        data-type="<?php echo esc_attr($f['type'] ?? ''); ?>" 
+                                                        data-mode="whitelist"
+                                                        title="Tandai sebagai kode sah plugin & kecualikan dari scan selanjutnya">
+                                                    Tandai Sah
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -560,6 +606,84 @@ document.addEventListener('DOMContentLoaded', function() {
                 }, 2000);
             }).catch(function() {
                 alert('Gagal menyalin ringkasan ke clipboard.');
+            });
+        });
+    }
+
+    // Remediasi Individual Finding
+    var ajaxUrl = <?php echo json_encode(admin_url('admin-ajax.php')); ?>;
+    var ajaxNonce = <?php echo json_encode(wp_create_nonce('ajs_ajax_scan_nonce')); ?>;
+
+    document.querySelectorAll('.ajs-btn-remediate-single').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            var file = this.getAttribute('data-file');
+            var type = this.getAttribute('data-type');
+            var mode = this.getAttribute('data-mode') || 'ai_auto';
+            var cell = this.closest('.ajs-remediate-cell');
+            var originalHtml = cell.innerHTML;
+
+            cell.innerHTML = '<span style="color:#2563eb; font-size:12px; display:inline-flex; align-items:center; gap:4px;"><span class="dashicons dashicons-update ajs-spin"></span> Memproses Remediasi AI...</span>';
+
+            var formData = new FormData();
+            formData.append('action', 'ajs_remediate_finding');
+            formData.append('nonce', ajaxNonce);
+            formData.append('finding_file', file);
+            formData.append('finding_type', type);
+            formData.append('remediation_mode', mode);
+
+            fetch(ajaxUrl, {
+                method: 'POST',
+                body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(res) {
+                if (!res.success) {
+                    throw new Error(res.data && res.data.message ? res.data.message : 'Gagal remediasi.');
+                }
+                var data = res.data;
+                var badge = data.badge_text || 'Selesai / Terkarantina';
+                var msg = data.message || '';
+                cell.innerHTML = '<span style="color:#16a34a; font-weight:bold; font-size:12px; display:inline-flex; align-items:center; gap:4px;" title="' + msg.replace(/"/g, '&quot;') + '"><span class="dashicons dashicons-yes"></span> ' + badge + '</span><div style="font-size:11.5px; color:#475569; margin-top:2px;">' + msg + '</div>';
+            })
+            .catch(function(err) {
+                cell.innerHTML = '<span style="color:#dc2626; font-size:12px;">Gagal: ' + err.message + '</span><br>' + originalHtml;
+            });
+        });
+    });
+
+    // Batch Remediation (Auto-Fix Semua Temuan dengan AI)
+    var batchBtn = document.getElementById('ajs-btn-batch-fix');
+    if (batchBtn) {
+        batchBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (!confirm('Jalankan Remediasi AI pada seluruh temuan yang belum diselesaikan?\n\nAI akan secara otomatis membedakan kode sah plugin (WooCommerce, LearnPress, dll) vs backdoor peretas, lalu menetralkan atau mengarantina otomatis.')) {
+                return;
+            }
+
+            batchBtn.disabled = true;
+            batchBtn.innerHTML = '<span class="dashicons dashicons-update ajs-spin" style="margin-top:2px;"></span> Sedang Menganalisis & Memperbaiki dengan AI...';
+
+            var formData = new FormData();
+            formData.append('action', 'ajs_batch_remediate');
+            formData.append('nonce', ajaxNonce);
+
+            fetch(ajaxUrl, {
+                method: 'POST',
+                body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(res) {
+                if (!res.success) {
+                    throw new Error(res.data && res.data.message ? res.data.message : 'Gagal batch remediasi.');
+                }
+                alert(res.data.message);
+                window.location.reload();
+            })
+            .catch(function(err) {
+                alert('Terjadi kendala: ' + err.message);
+                batchBtn.disabled = false;
+                batchBtn.innerHTML = '<span class="dashicons dashicons-superhero" style="margin-top: 1px;"></span> Remediasi Otomatis Semua Temuan dengan AI';
             });
         });
     }

@@ -118,6 +118,62 @@ class AJS_AI {
         return $result;
     }
 
+    public function remediate_threat(string $file_or_target, string $threat_type, string $snippet): array {
+        if (!$this->is_configured()) {
+            return [
+                'success'     => false,
+                'action'      => 'none',
+                'explanation' => 'Modul AI belum dikonfigurasi dengan API Key yang valid.',
+            ];
+        }
+
+        $system_prompt = "Anda analis keamanan siber WordPress. " .
+            "Tugas Anda memeriksa temuan keamanan pada file plugin/tema WordPress dan menentukan tindakan yang tepat: " .
+            "1. 'whitelist' => Jika temuan adalah FALSE POSITIVE pada kode sah plugin (seperti WooCommerce customer registration, LearnPress student checkout, Elementor, Theme My Login) yang bukan backdoor peretas. " .
+            "2. 'quarantine' => Jika file adalah file webshell/backdoor mandiri peretas yang harus dinonaktifkan (.quarantine_bak). " .
+            "3. 'patch' => Jika file sah yang disisipi skrip jahat dan perlu dinetralkan. " .
+            "Jawab HANYA format JSON valid tanpa markdown: {\"verdict\": \"SAFE_FALSE_POSITIVE\"|\"MALICIOUS_THREAT\", \"action\": \"whitelist\"|\"quarantine\"|\"patch\", \"explanation\": \"Penjelasan bahasa Indonesia maks 25 kata\"}";
+
+        $file_info   = wp_make_link_relative($file_or_target);
+        $user_prompt = "Target: {$file_info}\nTipe Ancaman: {$threat_type}\nCuplikan Kode:\n" . substr($snippet, 0, 2500);
+
+        $messages = [
+            ['role' => 'system', 'content' => $system_prompt],
+            ['role' => 'user', 'content' => $user_prompt]
+        ];
+
+        $response = $this->raw_request($messages, 250);
+        if (is_wp_error($response)) {
+            return [
+                'success'     => false,
+                'action'      => 'none',
+                'explanation' => 'Gagal terhubung ke AI: ' . $response->get_error_message(),
+            ];
+        }
+
+        $body       = wp_remote_retrieve_body($response);
+        $json       = json_decode($body, true);
+        $reply      = $json['choices'][0]['message']['content'] ?? '';
+        $clean_json = trim(preg_replace('/^```(?:json)?\s*|\s*```$/i', '', trim($reply)));
+        $parsed     = json_decode($clean_json, true);
+
+        if (is_array($parsed) && isset($parsed['action'])) {
+            return [
+                'success'     => true,
+                'verdict'     => (string)($parsed['verdict'] ?? 'MALICIOUS_THREAT'),
+                'action'      => (string)($parsed['action'] ?? 'whitelist'),
+                'explanation' => (string)($parsed['explanation'] ?? 'Tindakan remediasi diproses.'),
+                'raw'         => $clean_json,
+            ];
+        }
+
+        return [
+            'success'     => false,
+            'action'      => 'none',
+            'explanation' => 'Respon AI tidak valid: ' . substr($reply, 0, 100),
+        ];
+    }
+
     public function test_connection(): array {
         if (empty($this->endpoint) || empty($this->api_key)) {
             return ['success' => false, 'message' => 'Endpoint dan API Key belum diisi.'];

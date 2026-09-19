@@ -40,7 +40,9 @@ class AJS_Scanner {
         'system($_REQUEST',
         'preg_replace("/.*/e"',
         'preg_replace(\'/.*/e\'',
-        'create_function(',
+        'create_function($_',
+        'create_function(\'\', $_',
+        'create_function("", $_',
         'call_user_func($_POST',
         'call_user_func($_GET',
         'call_user_func($_REQUEST',
@@ -1088,6 +1090,13 @@ class AJS_Scanner {
                     $ext = strtolower(pathinfo($item->getFilename(), PATHINFO_EXTENSION));
                     if ($ext === 'php' && $item->getSize() <= $max_size) {
                         $file_path = $item->getPathname();
+
+                        // Abaikan file yang telah masuk daftar Whitelist oleh Admin/AI
+                        $whitelisted_files = (array)get_option('ajs_whitelisted_files', []);
+                        if (in_array($file_path, $whitelisted_files, true)) {
+                            continue;
+                        }
+
                         $content = @file_get_contents($file_path);
                         if ($content === false) {
                             continue;
@@ -1126,20 +1135,27 @@ class AJS_Scanner {
                         $has_user_func  = stripos($content, 'wp_create_user') !== false || stripos($content, 'wp_insert_user') !== false;
 
                         if ($has_user_func) {
-                            if (stripos($content, 'administrator') !== false ||
-                                stripos($content, '$_GET') !== false ||
-                                stripos($content, '$_POST') !== false ||
-                                stripos($content, '$_REQUEST') !== false ||
-                                stripos($content, "'init'") !== false ||
-                                stripos($content, '"init"') !== false ||
-                                stripos($content, "'wp_loaded'") !== false ||
-                                stripos($content, '"wp_loaded"') !== false) {
+                            $has_admin_escalation = stripos($content, "'administrator'") !== false ||
+                                                    stripos($content, '"administrator"') !== false ||
+                                                    (stripos($content, 'administrator') !== false && stripos($content, 'set_role') !== false);
+                            $has_backdoor_input   = stripos($content, '$_GET') !== false || stripos($content, '$_REQUEST') !== false;
+                            $has_unauth_hook      = stripos($content, "'init'") !== false || stripos($content, '"init"') !== false ||
+                                                    stripos($content, "'wp_loaded'") !== false || stripos($content, '"wp_loaded"') !== false;
+
+                            // Abaikan registrasi customer/subscriber sah pada plugin e-commerce / LMS resmi
+                            $is_legit_role = stripos($content, "'customer'") !== false || stripos($content, '"customer"') !== false ||
+                                             stripos($content, "'subscriber'") !== false || stripos($content, '"subscriber"') !== false ||
+                                             stripos($content, 'wc_create_new_customer') !== false || stripos($content, 'learnpress') !== false;
+
+                            if (($has_admin_escalation && ($has_backdoor_input || $has_unauth_hook)) && !$is_legit_role) {
                                 $matched_vector = 'wp_create_user/wp_insert_user (Injeksi User Admin Ilegal)';
                             }
-                        } elseif (stripos($content, 'set_role(\'administrator\')') !== false ||
-                                  stripos($content, 'set_role("administrator")') !== false ||
-                                  stripos($content, 'add_cap(\'administrator\')') !== false ||
-                                  stripos($content, 'add_cap("administrator")') !== false) {
+                        } elseif ((stripos($content, 'set_role(\'administrator\')') !== false ||
+                                   stripos($content, 'set_role("administrator")') !== false ||
+                                   stripos($content, 'add_cap(\'administrator\')') !== false ||
+                                   stripos($content, 'add_cap("administrator")') !== false) &&
+                                  stripos($content, 'current_user_can') === false &&
+                                  stripos($content, 'map_meta_cap') === false) {
                             $matched_vector = 'Eskalasi Role Administrator Tersembunyi (set_role/add_cap)';
                         } elseif (stripos($content, 'pre_option_default_role') !== false ||
                                   stripos($content, 'pre_option_users_can_register') !== false) {
@@ -1210,8 +1226,8 @@ class AJS_Scanner {
             return;
         }
 
-        // Batasi maksimal 10 file per scan agar tidak melebihi kuota/timeout API
-        $files_to_check = array_slice($suspicious_files, 0, 10);
+        // Batasi maksimal 25 file per scan agar tidak melebihi kuota/timeout API
+        $files_to_check = array_slice($suspicious_files, 0, 25);
 
         foreach ($files_to_check as $item) {
             $file_path = $item['path'];
@@ -1250,6 +1266,15 @@ class AJS_Scanner {
                         'healed'   => false,
                     ];
                 }
+            } else {
+                // AI menyatakan file ini aman / false positive pada plugin resmi
+                // Hapus dari temuan aktif agar website bersih dari laporan palsu
+                foreach ($findings as $k => $f) {
+                    if (($f['file'] ?? '') === $file_path && in_array($f['type'], ['rogue_user_backdoor', 'backdoor_signature', 'suspicious_code'], true)) {
+                        unset($findings[$k]);
+                    }
+                }
+                $findings = array_values($findings);
             }
 
             $ai_audit[] = [

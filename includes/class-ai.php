@@ -40,6 +40,15 @@ class AJS_AI {
                "Jawab HANYA dalam format JSON valid tanpa format markdown: {\"is_threat\": true|false, \"reason\": \"penjelasan ringkas maks 15 kata\"}";
     }
 
+    public function get_code_system_prompt(): string {
+        return "Anda analis keamanan siber spesialis deteksi malware, webshell, dan backdoor WordPress. " .
+               "Periksa potongan kode PHP berikut. Tentukan apakah memuat: " .
+               "1. Pembuatan user ilegal / backdoor administrator (wp_create_user, wp_insert_user, eskalasi role administrator tersembunyi, manipulasi hook init/wp_loaded/admin_init tanpa izin). " .
+               "2. Backdoor / webshell / eksekusi remote code (eval, assert, base64 obfuscation, system/exec/passthru dari input publik). " .
+               "3. Manipulasi opsi registrasi (users_can_register, default_role administrator). " .
+               "Jawab HANYA dalam format JSON valid tanpa format markdown: {\"is_threat\": true|false, \"reason\": \"penjelasan ringkas maks 20 kata mengapa kode berbahaya atau aman\"}";
+    }
+
     public function inspect_content(string $content): array {
         $system_prompt = $this->get_system_prompt();
 
@@ -58,6 +67,41 @@ class AJS_AI {
 
         $sample      = substr($content, 0, 2500);
         $user_prompt = "Periksa konten berikut:\n\n" . $sample;
+
+        $messages = [
+            ['role' => 'system', 'content' => $system_prompt],
+            ['role' => 'user', 'content' => $user_prompt]
+        ];
+
+        $result = $this->call_completion($messages);
+        $result['system_prompt'] = $system_prompt;
+        $result['user_prompt']   = $user_prompt;
+        $result['model']         = $this->model;
+        $result['endpoint']      = $this->endpoint;
+        $result['sample_length'] = strlen($sample);
+
+        return $result;
+    }
+
+    public function inspect_code(string $code, string $filepath = ''): array {
+        $system_prompt = $this->get_code_system_prompt();
+
+        if (!$this->is_configured() || empty(trim($code))) {
+            return [
+                'is_threat'     => false,
+                'reason'        => 'AI nonaktif atau kode kosong',
+                'system_prompt' => $system_prompt,
+                'user_prompt'   => '',
+                'model'         => $this->model,
+                'endpoint'      => $this->endpoint,
+                'raw_reply'     => '',
+                'sample_length' => 0,
+            ];
+        }
+
+        $sample    = substr($code, 0, 2500);
+        $file_info = $filepath ? "Lokasi file: " . wp_make_link_relative($filepath) . "\n\n" : "";
+        $user_prompt = "Periksa kode PHP berikut apakah memuat backdoor, webshell, atau skrip pembuatan user ilegal:\n\n{$file_info}" . $sample;
 
         $messages = [
             ['role' => 'system', 'content' => $system_prompt],

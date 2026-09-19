@@ -58,6 +58,9 @@ class AJS_WAF {
             add_filter('wp_insert_post_data', [$this, 'filter_post_content'], 10, 2);
         }
 
+        // Proteksi intersepsi pembuatan user admin ilegal tanpa sesi admin sah
+        add_action('user_register', [$this, 'guard_user_registration'], 1);
+
         // Cloaking & SEO Poisoning redirect protection
         add_filter('wp_redirect', [$this, 'guard_redirects'], 1, 2);
         add_action('template_redirect', [$this, 'start_output_cloaking_guard'], 1);
@@ -240,6 +243,29 @@ class AJS_WAF {
         }
 
         return $user;
+    }
+
+    public function guard_user_registration(int $user_id): void {
+        $user = get_userdata($user_id);
+        if (!$user) {
+            return;
+        }
+
+        // Cegah backdoor/exploit yang mendaftarkan user baru dengan role administrator tanpa login admin sah
+        if (in_array('administrator', (array)$user->roles, true) && !current_user_can('manage_options')) {
+            $user->set_role('subscriber');
+            $ip = $this->get_client_ip();
+            $this->log_security_event(
+                $ip,
+                'Rogue Admin Creation Blocked',
+                "User #{$user_id} ({$user->user_login}) terdaftar sebagai admin tanpa hak akses sah. Role otomatis diturunkan ke subscriber."
+            );
+            AJS_Notifications::send_alert(
+                '🚨 Intersepsi Pembuatan User Admin Ilegal!',
+                "Sistem Anti-Judol Shield mendeteksi dan menggagalkan injeksi akun baru dengan role Administrator tanpa sesi login admin resmi.\nUser: {$user->user_login} (ID: {$user_id}, Email: {$user->user_email})\nRole otomatis diturunkan ke Subscriber.",
+                'CRITICAL'
+            );
+        }
     }
 
     public function filter_spam_comment(array $commentdata): array {

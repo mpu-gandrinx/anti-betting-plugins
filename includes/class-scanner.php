@@ -10,9 +10,7 @@ class AJS_Scanner {
     private array $suspicious_extensions = ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phps', 'phar', 'suspected'];
 
     private array $backdoor_signatures = [
-        'eval(base64_decode',
-        'eval(gzinflate',
-        'eval(str_rot13',
+        // WebShell & Known Exploit Families
         'c99shell',
         'r57shell',
         'wso_version',
@@ -20,9 +18,39 @@ class AJS_Scanner {
         'ALFA_DATA',
         'IndoXploit',
         'b374k',
-        'preg_replace("/.*/e"',
+        'p0wny',
+
+        // Remote Execution & Dangerous Obfuscation
+        'eval(base64_decode',
+        'eval(gzinflate',
+        'eval(gzuncompress',
+        'eval(str_rot13',
+        'eval(hex2bin',
+        'eval($_POST',
+        'eval($_GET',
+        'eval($_REQUEST',
+        'eval($_COOKIE',
         'assert($_POST',
-        'system($_GET'
+        'assert($_REQUEST',
+        'assert($_GET',
+        'passthru($_',
+        'shell_exec($_',
+        'system($_POST',
+        'system($_GET',
+        'system($_REQUEST',
+        'preg_replace("/.*/e"',
+        'preg_replace(\'/.*/e\'',
+        'create_function(',
+        'call_user_func($_POST',
+        'call_user_func($_GET',
+        'call_user_func($_REQUEST',
+    ];
+
+    private array $official_root_files = [
+        'index.php', 'wp-activate.php', 'wp-blog-header.php', 'wp-comments-post.php',
+        'wp-config.php', 'wp-config-sample.php', 'wp-cron.php', 'wp-links-opml.php',
+        'wp-load.php', 'wp-login.php', 'wp-mail.php', 'wp-settings.php',
+        'wp-signup.php', 'wp-trackback.php', 'xmlrpc.php'
     ];
 
     public function __construct(?AJS_AI $ai = null, ?AJS_Auto_Heal $auto_heal = null) {
@@ -183,6 +211,15 @@ class AJS_Scanner {
     ): bool {
         $norm_path = rtrim(wp_normalize_path($path), '/');
 
+        // Selalu kecualikan direktori plugin Anti-Judol Shield itu sendiri agar scanner tidak mendeteksi signature miliknya sendiri
+        if (defined('AJS_PLUGIN_DIR')) {
+            $ajs_dir = rtrim(wp_normalize_path(AJS_PLUGIN_DIR), '/');
+            if ($norm_path === $ajs_dir || strpos($norm_path . '/', $ajs_dir . '/') === 0) {
+                $reason = 'Direktori plugin Anti-Judol Shield (self-exclude)';
+                return true;
+            }
+        }
+
         // 1. Cek mount jaringan / NFS jika opsi aktif
         if ($skip_nfs) {
             if (substr($norm_path, 0, 2) === '//') {
@@ -272,6 +309,7 @@ class AJS_Scanner {
         $skip_nfs       = (int)get_option('ajs_scan_skip_nfs', 1) === 1;
         $excluded_rules = $this->get_excluded_paths();
         $network_mounts = $skip_nfs ? $this->get_network_mounts() : [];
+        $suspicious_files = [];
 
         // 1. Scan uploads directory for illegal script files (jika tidak di-skip dan bukan NFS)
         $skip_reason = '';
@@ -289,13 +327,28 @@ class AJS_Scanner {
             $this->scan_directory_for_scripts($uploads_path, $findings, $auto_heal, $skipped_paths, $stats['uploads_scanned']);
         }
 
-        // 2. Scan active theme & plugin root for webshell signatures
+        // 2. Scan tema aktif, tema induk, plugins, mu-plugins, dan root untuk backdoor & rogue user creation
         if (is_dir($theme_dir)) {
-            $this->scan_directory_for_signatures($theme_dir, $findings, $skipped_paths, $stats['theme_scanned']);
+            $this->scan_directory_for_signatures($theme_dir, $findings, $skipped_paths, $stats['theme_scanned'], $suspicious_files);
         }
+        $parent_theme = get_template_directory();
+        if ($parent_theme !== $theme_dir && is_dir($parent_theme)) {
+            $this->scan_directory_for_signatures($parent_theme, $findings, $skipped_paths, $stats['theme_scanned'], $suspicious_files);
+        }
+        $mu_plugins = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : (WP_CONTENT_DIR . '/mu-plugins');
+        if (is_dir($mu_plugins)) {
+            $this->scan_directory_for_signatures($mu_plugins, $findings, $skipped_paths, $stats['theme_scanned'], $suspicious_files);
+        }
+        if (defined('WP_PLUGIN_DIR') && is_dir(WP_PLUGIN_DIR)) {
+            $this->scan_directory_for_signatures(WP_PLUGIN_DIR, $findings, $skipped_paths, $stats['theme_scanned'], $suspicious_files);
+        }
+        $this->scan_root_php_files($findings, $suspicious_files, $stats['theme_scanned']);
 
-        // 3. AI Deep Scan: Check published articles & pages for judol injections
+        // 3. AI Deep Scan: Analisis file skrip mencurigakan (backdoor/user creator) & postingan terbitan
         if ($ai_deep_scan && $this->ai && $this->ai->is_configured()) {
+            if (!empty($suspicious_files)) {
+                $this->scan_suspicious_files_with_ai($suspicious_files, $findings, $ai_audit);
+            }
             $this->scan_posts_for_judol($findings, $auto_heal, $ai_audit);
             $stats['ai_scanned'] = count($ai_audit);
         }
@@ -403,12 +456,13 @@ class AJS_Scanner {
 
         switch ($step) {
             case 'init':
-                $session_data['findings']      = [];
-                $session_data['skipped_paths'] = [];
-                $session_data['ai_audit']      = [];
-                $session_data['db_audit']      = [];
-                $session_data['core_audit']    = [];
-                $session_data['stats']         = [
+                $session_data['findings']         = [];
+                $session_data['skipped_paths']    = [];
+                $session_data['ai_audit']         = [];
+                $session_data['db_audit']         = [];
+                $session_data['core_audit']       = [];
+                $session_data['suspicious_files'] = [];
+                $session_data['stats']            = [
                     'uploads_scanned'  => 0,
                     'theme_scanned'    => 0,
                     'ai_scanned'       => 0,
@@ -477,34 +531,59 @@ class AJS_Scanner {
 
                 $response['next_step']   = 'scan_theme';
                 $response['progress']    = 40;
-                $response['status_text'] = 'Pemindaian direktori uploads selesai. Memindai tema aktif...';
+                $response['status_text'] = 'Pemindaian direktori uploads selesai. Memindai tema aktif, plugins & backdoor...';
                 $response['logs']        = $logs;
                 break;
 
             case 'scan_theme':
                 $logs = [];
+                $before_count = count($session_data['findings']);
+                if (!isset($session_data['suspicious_files']) || !is_array($session_data['suspicious_files'])) {
+                    $session_data['suspicious_files'] = [];
+                }
+
+                // 1. Scan Tema Aktif
                 if (is_dir($theme_dir)) {
-                    $theme_name   = basename($theme_dir);
-                    $before_count = count($session_data['findings']);
+                    $theme_name = basename($theme_dir);
+                    $this->scan_directory_for_signatures($theme_dir, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
+                    $logs[] = "Pemindaian tema aktif ({$theme_name}): {$session_data['stats']['theme_scanned']} file PHP diperiksa.";
+                }
 
-                    $this->scan_directory_for_signatures($theme_dir, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned']);
-                    $found_here = count($session_data['findings']) - $before_count;
+                // 2. Scan Tema Induk jika ada
+                $parent_theme = get_template_directory();
+                if ($parent_theme !== $theme_dir && is_dir($parent_theme)) {
+                    $this->scan_directory_for_signatures($parent_theme, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
+                    $logs[] = "Pemindaian tema induk (" . basename($parent_theme) . ") selesai.";
+                }
 
-                    $logs[] = "Pemindaian tema ({$theme_name}): {$session_data['stats']['theme_scanned']} file PHP diperiksa.";
+                // 3. Scan Must-Use Plugins (vektor umum backdoor)
+                $mu_plugins = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : (WP_CONTENT_DIR . '/mu-plugins');
+                if (is_dir($mu_plugins)) {
+                    $this->scan_directory_for_signatures($mu_plugins, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
+                    $logs[] = "Pemindaian must-use plugins (wp-content/mu-plugins) selesai.";
+                }
 
-                    if ($found_here > 0) {
-                        $logs[] = "Peringatan: Terdeteksi {$found_here} signature webshell/backdoor pada tema {$theme_name}!";
-                    } else {
-                        $logs[] = "Tema aktif ({$theme_name}) bersih dari pola webshell & backdoor.";
-                    }
+                // 4. Scan Direktori Plugins
+                if (defined('WP_PLUGIN_DIR') && is_dir(WP_PLUGIN_DIR)) {
+                    $this->scan_directory_for_signatures(WP_PLUGIN_DIR, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
+                    $logs[] = "Pemindaian direktori plugins (wp-content/plugins) selesai.";
+                }
+
+                // 5. Scan File PHP Root WordPress (ABSPATH)
+                $this->scan_root_php_files($session_data['findings'], $session_data['suspicious_files'], $session_data['stats']['theme_scanned']);
+                $logs[] = "Verifikasi file skrip PHP di direktori root WordPress selesai.";
+
+                $found_here = count($session_data['findings']) - $before_count;
+                if ($found_here > 0) {
+                    $logs[] = "Peringatan: Terdeteksi {$found_here} indikasi webshell/backdoor pembuat user ilegal!";
                 } else {
-                    $logs[] = 'Direktori tema aktif tidak ditemukan.';
+                    $logs[] = "Tema, plugins, mu-plugins, dan file root bersih dari signature backdoor.";
                 }
 
                 $has_ai = $ai_deep_scan && $this->ai && $this->ai->is_configured();
                 $response['next_step']   = $has_ai ? 'scan_ai' : 'verify_integrity';
                 $response['progress']    = 60;
-                $response['status_text'] = $has_ai ? 'Memulai AI Deep Screening pada artikel...' : 'Memeriksa integritas file Golden Baseline...';
+                $response['status_text'] = $has_ai ? 'Memulai AI Deep Screening pada file mencurigakan & artikel...' : 'Memeriksa integritas file Golden Baseline...';
                 $response['logs']        = $logs;
                 break;
 
@@ -512,16 +591,25 @@ class AJS_Scanner {
                 $logs = [];
                 if ($this->ai && $this->ai->is_configured()) {
                     $before_count = count($session_data['findings']);
+
+                    // 1. Analisis AI pada file skrip mencurigakan / kandidat backdoor
+                    $suspicious_files = $session_data['suspicious_files'] ?? [];
+                    if (!empty($suspicious_files)) {
+                        $logs[] = "AI Deep Screening: Mengirim " . count($suspicious_files) . " sampel potongan kode mencurigakan ke model " . esc_html($this->ai->get_model()) . " untuk deteksi backdoor/user injection...";
+                        $this->scan_suspicious_files_with_ai($suspicious_files, $session_data['findings'], $session_data['ai_audit']);
+                    }
+
+                    // 2. Analisis AI pada artikel & postingan
                     $this->scan_posts_for_judol($session_data['findings'], $auto_heal, $session_data['ai_audit']);
                     $found_here = count($session_data['findings']) - $before_count;
                     $session_data['stats']['ai_scanned'] = count($session_data['ai_audit']);
 
-                    $logs[] = "AI Screening: " . count($session_data['ai_audit']) . " artikel/postingan diperiksa oleh model " . esc_html($this->ai->get_model()) . ".";
+                    $logs[] = "AI Screening Selesai: " . count($session_data['ai_audit']) . " item (skrip & artikel) diperiksa oleh model " . esc_html($this->ai->get_model()) . ".";
 
                     if ($found_here > 0) {
-                        $logs[] = "AI Screening: Ditemukan {$found_here} artikel disusupi link/materi judi online!";
+                        $logs[] = "Peringatan AI: Terkonfirmasi {$found_here} ancaman baru melalui penalaran AI!";
                     } else {
-                        $logs[] = 'AI Screening: Seluruh artikel yang diperiksa bersih dari materi judi online.';
+                        $logs[] = 'AI Screening: Seluruh sampel kode dan artikel yang diperiksa bersih/aman.';
                     }
                 } else {
                     $logs[] = 'AI Screening dilewati (modul AI belum dikonfigurasi).';
@@ -567,12 +655,12 @@ class AJS_Scanner {
                 $found_here = count($session_data['findings']) - $before_count;
                 $session_data['stats']['db_checked'] = count($session_data['db_audit']);
 
-                $logs[] = "Database scan: " . count($session_data['db_audit']) . " pola kata kunci judi diperiksa pada tabel wp_options.";
+                $logs[] = "Database scan: " . count($session_data['db_audit']) . " pemeriksaan (options, registrasi publik, & akun administrator) dijalankan.";
 
                 if ($found_here > 0) {
-                    $logs[] = "Peringatan: Ditemukan {$found_here} opsi mencurigakan/spam judi pada tabel wp_options!";
+                    $logs[] = "Peringatan: Ditemukan {$found_here} anomali/opsi mencurigakan pada database!";
                 } else {
-                    $logs[] = 'Tabel opsi database (wp_options) bersih dari kata kunci dan payload judi.';
+                    $logs[] = 'Tabel opsi database & pengaturan registrasi pengguna bersih dari manipulasi.';
                 }
 
                 $response['next_step']   = 'scan_core';
@@ -652,30 +740,117 @@ class AJS_Scanner {
             '%base64_decode(%', '%eval(%', '%scatter%hitam%'
         ];
 
+        $flagged_options = [];
+
         foreach ($patterns as $p) {
             $results = $wpdb->get_results($wpdb->prepare(
                 "SELECT option_name FROM {$wpdb->options} 
-                 WHERE option_value LIKE %s AND option_name NOT LIKE 'ajs_%' LIMIT 5",
+                 WHERE option_value LIKE %s 
+                   AND option_name NOT LIKE '%ajs_%' 
+                   AND option_name NOT LIKE '_transient_%ajs_%'
+                   AND option_name NOT LIKE '_transient_timeout_%ajs_%'
+                 LIMIT 5",
                 $p
             ));
 
             $matched_options = [];
             if (!empty($results)) {
                 foreach ($results as $row) {
-                    $matched_options[] = $row->option_name;
-                    $findings[] = [
-                        'type'     => 'db_option_tampered',
-                        'severity' => 'CRITICAL',
-                        'file'     => "Database Option: {$row->option_name}",
-                        'message'  => 'Ditemukan skrip mencurigakan/konten judi tersimpan di tabel opsi database WordPress.',
-                        'healed'   => false,
-                    ];
+                    $opt_name = $row->option_name;
+                    $matched_options[] = $opt_name;
+
+                    // Cegah duplikasi finding jika opsi yang sama cocok di beberapa pattern
+                    if (!isset($flagged_options[$opt_name])) {
+                        $flagged_options[$opt_name] = true;
+                        $findings[] = [
+                            'type'     => 'db_option_tampered',
+                            'severity' => 'CRITICAL',
+                            'file'     => "Database Option: {$opt_name}",
+                            'message'  => 'Ditemukan skrip mencurigakan/konten judi tersimpan di tabel opsi database WordPress.',
+                            'healed'   => false,
+                        ];
+                    }
                 }
             }
 
             $db_audit[] = [
                 'pattern' => $p,
                 'matched' => $matched_options,
+            ];
+        }
+
+        // Audit Pengaturan Registrasi Pengguna Ilegal
+        $this->audit_user_registration_settings($findings, $db_audit);
+
+        // Audit Akun Administrator di wp_users
+        $this->audit_administrator_accounts($findings, $db_audit);
+    }
+
+    public function audit_user_registration_settings(array &$findings, array &$db_audit = []): void {
+        $users_can_register = (int)get_option('users_can_register', 0);
+        $default_role       = (string)get_option('default_role', 'subscriber');
+
+        if ($users_can_register === 1 && $default_role === 'administrator') {
+            $findings[] = [
+                'type'     => 'rogue_admin_registration',
+                'severity' => 'CRITICAL',
+                'file'     => 'Database Option: default_role (administrator) & users_can_register (1)',
+                'message'  => 'BAHAYA KRITIS: Registrasi terbuka aktif dan Role Bawaan adalah Administrator! Penyerang dapat membuat akun admin tanpa batas dari form registrasi publik.',
+                'healed'   => false,
+            ];
+            $db_audit[] = [
+                'pattern' => 'Cek Registrasi Terbuka Administrator',
+                'matched' => ['users_can_register = 1', 'default_role = administrator (Eksploitasi Aktif!)'],
+            ];
+        } else {
+            $db_audit[] = [
+                'pattern' => 'Cek Registrasi Terbuka Administrator',
+                'matched' => [],
+            ];
+        }
+    }
+
+    public function audit_administrator_accounts(array &$findings, array &$db_audit = []): void {
+        global $wpdb;
+        $prefix  = $wpdb->get_blog_prefix();
+        $cap_key = $prefix . 'capabilities';
+
+        $admin_users = $wpdb->get_results($wpdb->prepare(
+            "SELECT u.ID, u.user_login, u.user_email, u.user_registered 
+             FROM {$wpdb->users} u
+             INNER JOIN {$wpdb->usermeta} m ON u.ID = m.user_id
+             WHERE m.meta_key = %s AND m.meta_value LIKE %s
+             ORDER BY u.user_registered DESC",
+            $cap_key,
+            '%administrator%'
+        ));
+
+        if (!empty($admin_users)) {
+            $admin_list = [];
+            $suspicious_names = ['admin1', 'admin2', 'wp_admin', 'system', 'root', 'backup', 'support', 'test', 'user', 'manager', 'updater', 'service'];
+
+            foreach ($admin_users as $admin) {
+                $login = (string)$admin->user_login;
+                $email = (string)$admin->user_email;
+                $admin_list[] = "{$login} ({$email}, #{$admin->ID})";
+
+                $is_suspicious_name  = in_array(strtolower($login), $suspicious_names, true);
+                $is_suspicious_email = (bool)preg_match('/@(temp|mailinator|guerrillamail|yopmail|disposable|ru|xyz|top|pw)\b/i', $email);
+
+                if ($is_suspicious_name || $is_suspicious_email) {
+                    $findings[] = [
+                        'type'     => 'suspicious_admin_account',
+                        'severity' => 'HIGH',
+                        'file'     => "User ID #{$admin->ID}: {$login}",
+                        'message'  => "Akun Administrator mencurigakan terdeteksi (Login: {$login}, Email: {$email}, Terdaftar: {$admin->user_registered}). Verifikasi apakah akun ini sah dibuat pemilik situs.",
+                        'healed'   => false,
+                    ];
+                }
+            }
+
+            $db_audit[] = [
+                'pattern' => 'Audit Akun Administrator (' . count($admin_users) . ' akun ditemukan)',
+                'matched' => $admin_list,
             ];
         }
     }
@@ -868,7 +1043,13 @@ class AJS_Scanner {
         }
     }
 
-    private function scan_directory_for_signatures(string $dir, array &$findings, array &$skipped_paths = [], int &$scanned_count = 0): void {
+    private function scan_directory_for_signatures(
+        string $dir,
+        array &$findings,
+        array &$skipped_paths = [],
+        int &$scanned_count = 0,
+        array &$suspicious_files = []
+    ): void {
         $excluded_rules = $this->get_excluded_paths();
         $skip_nfs       = (int)get_option('ajs_scan_skip_nfs', 1) === 1;
         $network_mounts = $skip_nfs ? $this->get_network_mounts() : [];
@@ -893,32 +1074,201 @@ class AJS_Scanner {
 
             $iterator = new RecursiveIteratorIterator($filter);
             $max_size = 500 * 1024; // Batas 500KB per file untuk efisiensi scanner
+            $max_files = 15000;
+            $files_done = 0;
 
             foreach ($iterator as $item) {
                 if ($item->isFile()) {
+                    $files_done++;
                     $scanned_count++;
+                    if ($files_done > $max_files) {
+                        break;
+                    }
+
                     $ext = strtolower(pathinfo($item->getFilename(), PATHINFO_EXTENSION));
                     if ($ext === 'php' && $item->getSize() <= $max_size) {
-                        $content = @file_get_contents($item->getPathname());
-                        if ($content !== false) {
-                            foreach ($this->backdoor_signatures as $sig) {
-                                if (stripos($content, $sig) !== false) {
-                                    $findings[] = [
-                                        'type'     => 'backdoor_signature',
-                                        'severity' => 'HIGH',
-                                        'file'     => $item->getPathname(),
-                                        'message'  => "Terdeteksi pola malware/webshell: '{$sig}'",
-                                        'healed'   => false,
-                                    ];
-                                    break;
-                                }
+                        $file_path = $item->getPathname();
+                        $content = @file_get_contents($file_path);
+                        if ($content === false) {
+                            continue;
+                        }
+
+                        $file_flagged = false;
+
+                        // 1. Cek Signature Webshell & RCE Terkenal
+                        foreach ($this->backdoor_signatures as $sig) {
+                            $pos = stripos($content, $sig);
+                            if ($pos !== false) {
+                                $findings[] = [
+                                    'type'     => 'backdoor_signature',
+                                    'severity' => 'CRITICAL',
+                                    'file'     => $file_path,
+                                    'message'  => "Terdeteksi pola malware/webshell: '{$sig}'",
+                                    'healed'   => false,
+                                ];
+                                $start = max(0, $pos - 300);
+                                $suspicious_files[] = [
+                                    'path'      => $file_path,
+                                    'snippet'   => substr($content, $start, 2500),
+                                    'signature' => $sig,
+                                ];
+                                $file_flagged = true;
+                                break;
                             }
+                        }
+
+                        if ($file_flagged) {
+                            continue;
+                        }
+
+                        // 2. Cek Vektor Pembuatan User Ilegal / Backdoor Administrator
+                        $matched_vector = null;
+                        $has_user_func  = stripos($content, 'wp_create_user') !== false || stripos($content, 'wp_insert_user') !== false;
+
+                        if ($has_user_func) {
+                            if (stripos($content, 'administrator') !== false ||
+                                stripos($content, '$_GET') !== false ||
+                                stripos($content, '$_POST') !== false ||
+                                stripos($content, '$_REQUEST') !== false ||
+                                stripos($content, "'init'") !== false ||
+                                stripos($content, '"init"') !== false ||
+                                stripos($content, "'wp_loaded'") !== false ||
+                                stripos($content, '"wp_loaded"') !== false) {
+                                $matched_vector = 'wp_create_user/wp_insert_user (Injeksi User Admin Ilegal)';
+                            }
+                        } elseif (stripos($content, 'set_role(\'administrator\')') !== false ||
+                                  stripos($content, 'set_role("administrator")') !== false ||
+                                  stripos($content, 'add_cap(\'administrator\')') !== false ||
+                                  stripos($content, 'add_cap("administrator")') !== false) {
+                            $matched_vector = 'Eskalasi Role Administrator Tersembunyi (set_role/add_cap)';
+                        } elseif (stripos($content, 'pre_option_default_role') !== false ||
+                                  stripos($content, 'pre_option_users_can_register') !== false) {
+                            $matched_vector = 'Pembajakan Filter Registrasi (pre_option_default_role)';
+                        } elseif (stripos($content, 'update_option(\'default_role\', \'administrator\'') !== false ||
+                                  stripos($content, 'update_option("default_role", "administrator"') !== false) {
+                            $matched_vector = 'Injeksi Default Role Administrator di Database';
+                        }
+
+                        if ($matched_vector !== null) {
+                            $pos   = stripos($content, 'wp_create_user') ?: stripos($content, 'administrator');
+                            $start = max(0, ($pos ?: 0) - 300);
+                            $findings[] = [
+                                'type'     => 'rogue_user_backdoor',
+                                'severity' => 'CRITICAL',
+                                'file'     => $file_path,
+                                'message'  => "Terdeteksi pola skrip pembuat user ilegal/backdoor admin: '{$matched_vector}'",
+                                'healed'   => false,
+                            ];
+                            $suspicious_files[] = [
+                                'path'      => $file_path,
+                                'snippet'   => substr($content, $start, 2500),
+                                'signature' => $matched_vector,
+                            ];
                         }
                     }
                 }
             }
         } catch (Throwable $e) {
             // Tangani error permission atau file unreadable
+        }
+    }
+
+    public function scan_root_php_files(array &$findings, array &$suspicious_files = [], int &$scanned_count = 0): void {
+        $root_files = @glob(ABSPATH . '*.php');
+        if (!$root_files) {
+            return;
+        }
+
+        foreach ($root_files as $file_path) {
+            $scanned_count++;
+            $filename = basename($file_path);
+            if (in_array(strtolower($filename), $this->official_root_files, true)) {
+                continue;
+            }
+
+            $content = (string)@file_get_contents($file_path);
+            $snippet = substr($content, 0, 2500);
+
+            $findings[] = [
+                'type'     => 'rogue_root_file',
+                'severity' => 'CRITICAL',
+                'file'     => $file_path,
+                'message'  => "Ditemukan file skrip PHP tidak resmi di direktori root WordPress ({$filename}). Berpotensi kuat sebagai webshell/backdoor.",
+                'healed'   => false,
+            ];
+
+            $suspicious_files[] = [
+                'path'      => $file_path,
+                'snippet'   => $snippet,
+                'signature' => 'Rogue root PHP file (' . $filename . ')',
+            ];
+        }
+    }
+
+    private function scan_suspicious_files_with_ai(array $suspicious_files, array &$findings, array &$ai_audit = []): void {
+        if (!$this->ai || !$this->ai->is_configured() || empty($suspicious_files)) {
+            return;
+        }
+
+        // Batasi maksimal 10 file per scan agar tidak melebihi kuota/timeout API
+        $files_to_check = array_slice($suspicious_files, 0, 10);
+
+        foreach ($files_to_check as $item) {
+            $file_path = $item['path'];
+            $snippet   = $item['snippet'] ?? '';
+
+            if (empty($snippet) && file_exists($file_path)) {
+                $snippet = (string)@file_get_contents($file_path);
+            }
+
+            if (empty($snippet)) {
+                continue;
+            }
+
+            $ai_check  = $this->ai->inspect_code($snippet, $file_path);
+            $is_threat = !empty($ai_check['is_threat']);
+
+            if ($is_threat) {
+                // Perbarui pesan temuan yang ada dengan penjelasan detail AI
+                $updated = false;
+                foreach ($findings as &$f) {
+                    if (($f['file'] ?? '') === $file_path) {
+                        $f['message'] .= ' (Analisis AI: ' . ($ai_check['reason'] ?? 'Backdoor terverifikasi') . ')';
+                        $f['severity'] = 'CRITICAL';
+                        $updated = true;
+                        break;
+                    }
+                }
+                unset($f);
+
+                if (!$updated) {
+                    $findings[] = [
+                        'type'     => 'ai_backdoor_detected',
+                        'severity' => 'CRITICAL',
+                        'file'     => $file_path,
+                        'message'  => 'AI Screening mendeteksi backdoor: ' . ($ai_check['reason'] ?? 'Ancaman kode berbahaya'),
+                        'healed'   => false,
+                    ];
+                }
+            }
+
+            $ai_audit[] = [
+                'id'             => 'FILE-' . substr(md5($file_path), 0, 5),
+                'title'          => basename($file_path) . ' (' . wp_make_link_relative($file_path) . ')',
+                'type'           => 'file_php',
+                'modified'       => file_exists($file_path) ? date('Y-m-d H:i:s', filemtime($file_path)) : '-',
+                'word_count'     => str_word_count($snippet),
+                'char_length'    => strlen($snippet),
+                'sample_snippet' => mb_substr($snippet, 0, 250) . (strlen($snippet) > 250 ? '...' : ''),
+                'system_prompt'  => $ai_check['system_prompt'] ?? $this->ai->get_code_system_prompt(),
+                'user_prompt'    => $ai_check['user_prompt'] ?? '',
+                'model'          => $ai_check['model'] ?? $this->ai->get_model(),
+                'endpoint'       => $ai_check['endpoint'] ?? $this->ai->get_endpoint(),
+                'is_threat'      => $is_threat,
+                'reason'         => $ai_check['reason'] ?? 'Aman',
+                'raw_reply'      => $ai_check['raw_reply'] ?? '',
+                'action'         => $is_threat ? 'Karantina / Hapus File' : 'Aman (Kode Normal)',
+            ];
         }
     }
 

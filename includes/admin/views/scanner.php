@@ -70,8 +70,8 @@ if (isset($_GET['settings_saved'])) {
             <p>
                 <label>
                     <input type="checkbox" name="ai_deep_scan" id="ajs_field_ai_deep_scan" value="1" <?php disabled(!$has_ai); ?>>
-                    <strong><?php esc_html_e('AI Deep Screening (Analisis Injeksi Artikel & Database):', 'anti-judol-shield'); ?></strong>
-                    <?php esc_html_e('Kirim sampel artikel terbitan terbaru ke AI untuk memverifikasi apakah ada teks tersembunyi/link judi online yang disusupi.', 'anti-judol-shield'); ?>
+                    <strong><?php esc_html_e('AI Deep Screening (Analisis Backdoor, File Mencurigakan & Artikel):', 'anti-judol-shield'); ?></strong>
+                    <?php esc_html_e('Kirim sampel kode mencurigakan (deteksi backdoor pembuat user ilegal/webshell) serta artikel terbaru ke model AI untuk analisis ancaman mendalam.', 'anti-judol-shield'); ?>
                     <?php if (!$has_ai) : ?>
                         <em style="color: #dc2626;">(AI belum aktif/dikonfigurasi di menu Pengaturan WAF)</em>
                     <?php endif; ?>
@@ -136,10 +136,10 @@ if (isset($_GET['settings_saved'])) {
             <div id="ajs-step-indicators" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;">
                 <span class="ajs-step-pill" data-step="init">1. Storage & NFS</span>
                 <span class="ajs-step-pill" data-step="scan_uploads">2. Uploads Scan</span>
-                <span class="ajs-step-pill" data-step="scan_theme">3. Tema & Webshell</span>
-                <span class="ajs-step-pill" data-step="scan_ai">4. AI Screening</span>
+                <span class="ajs-step-pill" data-step="scan_theme">3. Tema, Plugin & Backdoor</span>
+                <span class="ajs-step-pill" data-step="scan_ai">4. AI Deep Screening</span>
                 <span class="ajs-step-pill" data-step="verify_integrity">5. Golden Baseline</span>
-                <span class="ajs-step-pill" data-step="scan_database">6. Database Options</span>
+                <span class="ajs-step-pill" data-step="scan_database">6. Database & User Audit</span>
                 <span class="ajs-step-pill" data-step="scan_core">7. WP Core Checksums</span>
             </div>
 

@@ -112,15 +112,15 @@ foreach ($ai_audit as $item) {
         </div>
 
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #8b5cf6; padding: 14px; border-radius: 4px;">
-            <div style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">🎨 Tema & Webshell</div>
+            <div style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">🎨 Tema, Plugin & Backdoor</div>
             <div style="font-size: 20px; font-weight: bold; color: #1e293b; margin-top: 4px;"><?php echo esc_html(number_format_i18n($theme_scanned)); ?> <span style="font-size: 12px; font-weight: normal; color: #64748b;">file PHP</span></div>
-            <div style="font-size: 11.5px; color: #475569; margin-top: 2px;">13 signature backdoor diuji</div>
+            <div style="font-size: 11.5px; color: #475569; margin-top: 2px;">Webshell, backdoor & rogue user diuji</div>
         </div>
 
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #10b981; padding: 14px; border-radius: 4px;">
             <div style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">🤖 AI Deep Screening</div>
-            <div style="font-size: 20px; font-weight: bold; color: #1e293b; margin-top: 4px;"><?php echo esc_html(number_format_i18n($ai_scanned_cnt)); ?> <span style="font-size: 12px; font-weight: normal; color: #64748b;">artikel</span></div>
-            <div style="font-size: 11.5px; color: #475569; margin-top: 2px;">Model: <code><?php echo esc_html($ai_model); ?></code></div>
+            <div style="font-size: 20px; font-weight: bold; color: #1e293b; margin-top: 4px;"><?php echo esc_html(number_format_i18n($ai_scanned_cnt)); ?> <span style="font-size: 12px; font-weight: normal; color: #64748b;">item</span></div>
+            <div style="font-size: 11.5px; color: #475569; margin-top: 2px;">Skrip & artikel dianalisis model <code><?php echo esc_html($ai_model); ?></code></div>
         </div>
 
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #f59e0b; padding: 14px; border-radius: 4px;">
@@ -234,7 +234,7 @@ foreach ($ai_audit as $item) {
                     <?php esc_html_e('Transparansi Konfigurasi & Prompt Perintah AI', 'anti-judol-shield'); ?>
                 </h3>
                 <span style="font-size: 12px; background: #e0f2fe; color: #0369a1; padding: 3px 10px; border-radius: 9999px; font-weight: 600;">
-                    <?php echo count($ai_audit); ?> Artikel Diuji &bull; <?php echo $ai_threats_cnt; ?> Ancaman
+                    <?php echo count($ai_audit); ?> Item (Skrip & Artikel) Diuji &bull; <?php echo $ai_threats_cnt; ?> Ancaman
                 </span>
             </div>
 
@@ -270,15 +270,15 @@ foreach ($ai_audit as $item) {
             <div style="background: #f8fafc; border: 1px dashed #cbd5e1; padding: 20px; text-align: center; border-radius: 6px;">
                 <p style="color: #64748b; margin: 0; font-size: 13px;">
                     <?php if (!$is_ai_scanned) : ?>
-                        <em><?php esc_html_e('Pemindaian AI (AI Deep Screening) tidak dicentang saat scan terakhir dijalankan. Centang "AI Deep Screening" pada saat memindai untuk memeriksa artikel dan melihat transparansi analisis AI.', 'anti-judol-shield'); ?></em>
+                        <em><?php esc_html_e('Pemindaian AI (AI Deep Screening) tidak dicentang saat scan terakhir dijalankan. Centang "AI Deep Screening" pada saat memindai untuk memeriksa skrip mencurigakan & artikel dan melihat transparansi analisis AI.', 'anti-judol-shield'); ?></em>
                     <?php else : ?>
-                        <em><?php esc_html_e('Tidak ada postingan yang diperiksa atau modul AI belum dikonfigurasi dengan API Key yang valid.', 'anti-judol-shield'); ?></em>
+                        <em><?php esc_html_e('Tidak ada skrip mencurigakan atau postingan yang perlu diperiksa, atau modul AI belum dikonfigurasi dengan API Key yang valid.', 'anti-judol-shield'); ?></em>
                     <?php endif; ?>
                 </p>
             </div>
         <?php else : ?>
             <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
-                <h4 style="margin: 0; font-size: 14px; color: #1e293b;"><?php esc_html_e('Daftar Rinci Seluruh Artikel/Postingan yang Diperiksa oleh AI:', 'anti-judol-shield'); ?></h4>
+                <h4 style="margin: 0; font-size: 14px; color: #1e293b;"><?php esc_html_e('Daftar Rinci Seluruh Skrip & Artikel yang Diperiksa oleh AI:', 'anti-judol-shield'); ?></h4>
                 <span style="font-size: 12px; color: #64748b;">Menampilkan seluruh hasil, baik yang bersih maupun yang terinjeksi.</span>
             </div>
 

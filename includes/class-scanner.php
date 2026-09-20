@@ -308,6 +308,7 @@ class AJS_Scanner {
             'db_checked'       => 0,
             'core_checked'     => 0,
             'baseline_checked' => 0,
+            'vuln_checked'     => 0,
         ];
 
         $upload_dir     = wp_upload_dir();
@@ -319,6 +320,11 @@ class AJS_Scanner {
         $excluded_rules = $this->get_excluded_paths();
         $network_mounts = $skip_nfs ? $this->get_network_mounts() : [];
         $suspicious_files = [];
+
+        // 0. Audit Celah & Kerentanan Keamanan Sistem (Vulnerability & Hardening Audit)
+        $vuln_audit = [];
+        $this->scan_vulnerabilities($findings, $vuln_audit);
+        $stats['vuln_checked'] = count($vuln_audit);
 
         // 1. Scan uploads directory for illegal script files (jika tidak di-skip dan bukan NFS)
         $skip_reason = '';
@@ -394,6 +400,7 @@ class AJS_Scanner {
             'ai_scanned'    => $ai_deep_scan,
             'skipped_paths' => $skipped_paths,
             'stats'         => $stats,
+            'vuln_audit'    => $vuln_audit,
             'ai_audit'      => $ai_audit,
             'db_audit'      => $db_audit,
             'core_audit'    => $core_audit,
@@ -430,6 +437,9 @@ class AJS_Scanner {
         if (!isset($session_data['core_audit']) || !is_array($session_data['core_audit'])) {
             $session_data['core_audit'] = [];
         }
+        if (!isset($session_data['vuln_audit']) || !is_array($session_data['vuln_audit'])) {
+            $session_data['vuln_audit'] = [];
+        }
         if (!isset($session_data['stats']) || !is_array($session_data['stats'])) {
             $session_data['stats'] = [
                 'uploads_scanned'  => 0,
@@ -438,6 +448,7 @@ class AJS_Scanner {
                 'db_checked'       => 0,
                 'core_checked'     => 0,
                 'baseline_checked' => 0,
+                'vuln_checked'     => 0,
             ];
         }
 
@@ -470,6 +481,7 @@ class AJS_Scanner {
                 $session_data['ai_audit']         = [];
                 $session_data['db_audit']         = [];
                 $session_data['core_audit']       = [];
+                $session_data['vuln_audit']       = [];
                 $session_data['suspicious_files'] = [];
                 $session_data['stats']            = [
                     'uploads_scanned'  => 0,
@@ -478,6 +490,7 @@ class AJS_Scanner {
                     'db_checked'       => 0,
                     'core_checked'     => 0,
                     'baseline_checked' => 0,
+                    'vuln_checked'     => 0,
                 ];
                 $session_data['start_time']    = current_time('mysql');
                 $session_data['start_micro']   = microtime(true);
@@ -493,9 +506,29 @@ class AJS_Scanner {
                     $logs[] = 'Storage server: Menggunakan filesystem lokal.';
                 }
 
+                $response['next_step']   = 'scan_vuln';
+                $response['progress']    = 10;
+                $response['status_text'] = 'Storage terverifikasi. Mengaudit celah keamanan & konfigurasi hardening...';
+                $response['logs']        = $logs;
+                break;
+
+            case 'scan_vuln':
+                $logs = [];
+                $before_count = count($session_data['findings']);
+                $this->scan_vulnerabilities($session_data['findings'], $session_data['vuln_audit']);
+                $found_here = count($session_data['findings']) - $before_count;
+                $session_data['stats']['vuln_checked'] = count($session_data['vuln_audit']);
+
+                $logs[] = "Audit Celah & Kerentanan: " . count($session_data['vuln_audit']) . " indikator keamanan diperiksa.";
+                if ($found_here > 0) {
+                    $logs[] = "Peringatan Celah: Ditemukan {$found_here} kelemahan sistem / konfigurasi yang belum di-hardening!";
+                } else {
+                    $logs[] = "Konfigurasi sistem & wp-config.php memenuhi standar hardening aman.";
+                }
+
                 $response['next_step']   = 'scan_uploads';
-                $response['progress']    = 15;
-                $response['status_text'] = 'Storage terverifikasi. Bersiap memindai direktori uploads...';
+                $response['progress']    = 25;
+                $response['status_text'] = 'Audit celah selesai. Memeriksa direktori uploads...';
                 $response['logs']        = $logs;
                 break;
 
@@ -711,6 +744,7 @@ class AJS_Scanner {
                     'ai_scanned'    => $ai_deep_scan,
                     'skipped_paths' => $session_data['skipped_paths'],
                     'stats'         => $session_data['stats'],
+                    'vuln_audit'    => $session_data['vuln_audit'] ?? [],
                     'ai_audit'      => $session_data['ai_audit'],
                     'db_audit'      => $session_data['db_audit'],
                     'core_audit'    => $session_data['core_audit'],
@@ -740,6 +774,169 @@ class AJS_Scanner {
         $response['skipped_count']  = count($session_data['skipped_paths']);
 
         return $response;
+    }
+
+    public function scan_vulnerabilities(array &$findings, array &$vuln_audit = []): void {
+        // 1. Audit Hardening Konfigurasi wp-config.php
+        $wp_config_file = ABSPATH . 'wp-config.php';
+        if (!file_exists($wp_config_file) && file_exists(dirname(ABSPATH) . '/wp-config.php')) {
+            $wp_config_file = dirname(ABSPATH) . '/wp-config.php';
+        }
+
+        $config_content = file_exists($wp_config_file) ? (string)@file_get_contents($wp_config_file) : '';
+
+        // Cek DISALLOW_FILE_EDIT
+        $file_edit_disabled = defined('DISALLOW_FILE_EDIT') && DISALLOW_FILE_EDIT;
+        $vuln_audit[] = [
+            'item'     => 'DISALLOW_FILE_EDIT',
+            'status'   => $file_edit_disabled ? 'SAFE' : 'VULNERABLE',
+            'severity' => 'HIGH',
+            'detail'   => $file_edit_disabled ? 'Editor file tema & plugin dinonaktifkan di wp-config.php.' : 'Editor file tema/plugin aktif. Peretas yang membobol akun dapat langsung menulis webshell via dashboard.',
+        ];
+        if (!$file_edit_disabled) {
+            $findings[] = [
+                'type'     => 'vuln_file_edit_enabled',
+                'severity' => 'HIGH',
+                'file'     => 'wp-config.php: DISALLOW_FILE_EDIT',
+                'message'  => 'Celah Keamanan: Editor tema & plugin di dashboard aktif. Jika akun admin terkompromi, peretas dapat langsung menyisipkan webshell ke file PHP tema/plugin.',
+                'healed'   => false,
+            ];
+        }
+
+        // Cek WP_DEBUG_DISPLAY di production
+        $debug_display = defined('WP_DEBUG_DISPLAY') && WP_DEBUG_DISPLAY;
+        $vuln_audit[] = [
+            'item'     => 'WP_DEBUG_DISPLAY',
+            'status'   => $debug_display ? 'WARNING' : 'SAFE',
+            'severity' => 'MEDIUM',
+            'detail'   => $debug_display ? 'Pesan error ditampilkan ke pengunjung (kebocoran info jalur server & database).' : 'Error display dinonaktifkan di browser.',
+        ];
+        if ($debug_display) {
+            $findings[] = [
+                'type'     => 'vuln_debug_display_on',
+                'severity' => 'MEDIUM',
+                'file'     => 'wp-config.php: WP_DEBUG_DISPLAY',
+                'message'  => 'Kebocoran Informasi: WP_DEBUG_DISPLAY bernilai true. Pesan fatal error dapat membocorkan path direktori server ke publik.',
+                'healed'   => false,
+            ];
+        }
+
+        // Cek Secret Salts
+        $has_default_salts = strpos($config_content, 'put your unique phrase here') !== false;
+        $vuln_audit[] = [
+            'item'     => 'Authentication Salts & Keys',
+            'status'   => $has_default_salts ? 'VULNERABLE' : 'SAFE',
+            'severity' => 'CRITICAL',
+            'detail'   => $has_default_salts ? 'Salt keys masih memakai placeholder bawaan!' : 'Salt keys terkonfigurasi dengan string acak.',
+        ];
+        if ($has_default_salts) {
+            $findings[] = [
+                'type'     => 'vuln_default_salts',
+                'severity' => 'CRITICAL',
+                'file'     => 'wp-config.php: Security Salts',
+                'message'  => 'Bahaya Kritis: Authentication Salts di wp-config.php masih menggunakan nilai default. Cookie login dan token autentikasi mudah dipalsukan.',
+                'healed'   => false,
+            ];
+        }
+
+        // 2. Audit File Permissions wp-config.php
+        if (file_exists($wp_config_file)) {
+            $is_writable = is_writable($wp_config_file);
+            $perms = substr(sprintf('%o', fileperms($wp_config_file)), -4);
+            $vuln_audit[] = [
+                'item'     => 'Izin Berkas wp-config.php',
+                'status'   => ($perms === '0666' || $perms === '0777' || ($is_writable && PHP_OS_FAMILY !== 'Windows')) ? 'WARNING' : 'SAFE',
+                'severity' => 'HIGH',
+                'detail'   => "Mode izin berkas: {$perms}" . ($is_writable ? ' (Dapat ditulis server)' : ' (Read-only)'),
+            ];
+            if ($perms === '0666' || $perms === '0777') {
+                $findings[] = [
+                    'type'     => 'vuln_config_permissions',
+                    'severity' => 'HIGH',
+                    'file'     => 'wp-config.php: File Permissions ' . $perms,
+                    'message'  => "Izin berkas wp-config.php terlalu longgar ({$perms}). Seharusnya dibatasi ke 0640 atau 0600.",
+                    'healed'   => false,
+                ];
+            }
+        }
+
+        // 3. Audit Berkas Sensitif & Backup Bocor di Web Root
+        $sensitive_targets = [
+            '.env'              => 'Konfigurasi Environment / API Keys',
+            '.env.local'        => 'Konfigurasi Local Environment',
+            '.git/HEAD'         => 'Repositori Git Sumber Kode (Bocor ke Publik)',
+            'wp-config.php.bak' => 'Backup wp-config.php (Dapat Diunduh Publik)',
+            'wp-config.php.old' => 'Backup wp-config.php Lama',
+            'wp-config.old'     => 'File Backup Konfigurasi',
+            'dump.sql'          => 'Dump Database Mentah',
+            'database.sql'      => 'Dump Database SQL',
+            'backup.sql'        => 'Backup SQL Publik',
+            'phpinfo.php'       => 'Informasi Sensitif PHP Server',
+        ];
+
+        foreach ($sensitive_targets as $file_name => $label) {
+            $full_path = ABSPATH . $file_name;
+            $exists    = file_exists($full_path);
+            $vuln_audit[] = [
+                'item'     => "File Bocor: {$file_name}",
+                'status'   => $exists ? 'VULNERABLE' : 'SAFE',
+                'severity' => 'CRITICAL',
+                'detail'   => $exists ? "{$label} ditemukan di direktori publik server!" : 'Tidak ditemukan (Aman).',
+            ];
+            if ($exists) {
+                $findings[] = [
+                    'type'     => 'vuln_exposed_sensitive_file',
+                    'severity' => 'CRITICAL',
+                    'file'     => $full_path,
+                    'message'  => "File Sensitif Bocor: {$label} ({$file_name}) berada di direktori publik server dan dapat diunduh peretas untuk mencuri kredensial database.",
+                    'healed'   => false,
+                ];
+            }
+        }
+
+        // 4. Audit Eksekusi PHP di Folder Uploads
+        $upload_dir = wp_upload_dir();
+        $htaccess_uploads = trailingslashit($upload_dir['basedir']) . '.htaccess';
+        $has_htaccess_block = file_exists($htaccess_uploads) && stripos((string)@file_get_contents($htaccess_uploads), 'Require all denied') !== false;
+
+        $vuln_audit[] = [
+            'item'     => 'Proteksi Eksekusi PHP di Uploads',
+            'status'   => $has_htaccess_block ? 'SAFE' : 'WARNING',
+            'severity' => 'HIGH',
+            'detail'   => $has_htaccess_block ? 'File .htaccess pembatas PHP di uploads aktif.' : 'Tidak ada .htaccess proteksi PHP di folder uploads atau server menggunakan Nginx tanpa aturan deny.',
+        ];
+
+        if (!$has_htaccess_block) {
+            $findings[] = [
+                'type'     => 'vuln_uploads_php_executable',
+                'severity' => 'HIGH',
+                'file'     => $upload_dir['basedir'] . '/.htaccess',
+                'message'  => 'Folder wp-content/uploads/ tidak memiliki proteksi blokir PHP aktif. Jika peretas berhasil mengunggah skrip, skrip dapat langsung dieksekusi via URL.',
+                'healed'   => false,
+            ];
+        }
+
+        // 5. Audit Plugin & Tema Usang (Sumber CVE Celah Masuk Utama)
+        $plugin_updates = get_site_transient('update_plugins');
+        if (!empty($plugin_updates->response) && is_array($plugin_updates->response)) {
+            foreach ($plugin_updates->response as $plugin_file => $plugin_data) {
+                $plugin_name = $plugin_data->slug ?? basename($plugin_file, '.php');
+                $new_version = $plugin_data->new_version ?? 'terbaru';
+                $vuln_audit[] = [
+                    'item'     => "Plugin Usang: {$plugin_name}",
+                    'status'   => 'VULNERABLE',
+                    'severity' => 'HIGH',
+                    'detail'   => "Tersedia update ke versi {$new_version}. Plugin usang memiliki celah keamanan publik yang sering dieksploitasi peretas.",
+                ];
+                $findings[] = [
+                    'type'     => 'vuln_outdated_plugin',
+                    'severity' => 'HIGH',
+                    'file'     => "Plugin: {$plugin_name} (update -> v{$new_version})",
+                    'message'  => "Plugin usang terdeteksi ({$plugin_name}). Eksploitasi celah plugin usang (unauthenticated file upload/SQLi) adalah penyebab utama situs di-hack berulang kali.",
+                    'healed'   => false,
+                ];
+            }
+        }
     }
 
     public function scan_database_options(array &$findings, array &$db_audit = []): void {

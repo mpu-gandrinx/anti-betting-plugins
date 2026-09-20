@@ -39,22 +39,23 @@ class AJS_IDS_IPS {
         }
 
         // 2. IDS Behavioral & Signature Analysis
-        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        $request_uri  = $_SERVER['REQUEST_URI'] ?? '';
         $query_string = $_SERVER['QUERY_STRING'] ?? '';
-        $raw_post = file_get_contents('php://input');
+        $raw_post     = @file_get_contents('php://input');
 
-        $check_target = $request_uri . ' ' . $query_string . ' ' . substr($raw_post, 0, 2000);
+        $check_target = urldecode(urldecode($request_uri . ' ' . $query_string . ' ' . substr((string)$raw_post, 0, 2000)));
 
         foreach ($this->probe_patterns as $rule_name => $pattern) {
             if (preg_match($pattern, $check_target)) {
-                $score = ($rule_name === 'Webshell Probe' || $rule_name === 'SQL Injection Probe') ? 60 : 40;
-                $this->add_anomaly_score($ip, $score, $rule_name);
+                $is_critical = ($rule_name === 'Webshell Probe' || $rule_name === 'SQL Injection Probe');
+                $score = $is_critical ? 100 : 50;
+                $this->add_anomaly_score($ip, $score, $rule_name, $is_critical);
                 break;
             }
         }
     }
 
-    public function add_anomaly_score(string $ip, int $score, string $reason): void {
+    public function add_anomaly_score(string $ip, int $score, string $reason, bool $force_immediate_ban = false): void {
         $transient_key = 'ajs_score_' . md5($ip);
         $current_score = (int)get_transient($transient_key) ?: 0;
         $new_score = $current_score + $score;
@@ -77,8 +78,8 @@ class AJS_IDS_IPS {
             ['%s', '%s', '%s', '%s', '%s', '%s']
         );
 
-        if ($new_score >= $this->ban_threshold) {
-            $this->ban_ip($ip, $this->ban_duration, "Score {$new_score} exceeded threshold ({$reason})");
+        if ($force_immediate_ban || $new_score >= $this->ban_threshold) {
+            $this->ban_ip($ip, $this->ban_duration, "Kritis/Batas Skor Terlampaui ({$reason})");
             $this->drop_connection($ip, "IPS Auto-Banned ({$reason})");
         }
     }
@@ -165,22 +166,44 @@ class AJS_IDS_IPS {
         exit;
     }
 
-    public function get_client_ip(): string {
-        $ip_keys = [
-            'HTTP_CF_CONNECTING_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'HTTP_CLIENT_IP',
-            'REMOTE_ADDR'
+    public function is_cloudflare_ip(string $ip): bool {
+        $cf_ranges = [
+            '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+            '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+            '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+            '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
         ];
+        $ip_long = ip2long($ip);
+        if ($ip_long === false) {
+            return false;
+        }
+        foreach ($cf_ranges as $range) {
+            list($net, $mask) = explode('/', $range);
+            $net_long = ip2long($net);
+            $mask_long = ~((1 << (32 - (int)$mask)) - 1);
+            if (($ip_long & $mask_long) === ($net_long & $mask_long)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        foreach ($ip_keys as $key) {
-            if (!empty($_SERVER[$key])) {
-                $ips = explode(',', $_SERVER[$key]);
-                $ip = trim($ips[0]);
-                if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                    return $ip;
+    public function get_client_ip(): string {
+        $remote_ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+
+        // Hanya percaya HTTP_CF_CONNECTING_IP jika request valid dari Cloudflare atau token disetel
+        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+            $cf_token = get_option('ajs_cf_api_token', '');
+            if (!empty($cf_token) || $this->is_cloudflare_ip($remote_ip)) {
+                $cf_ip = trim($_SERVER['HTTP_CF_CONNECTING_IP']);
+                if (filter_var($cf_ip, FILTER_VALIDATE_IP)) {
+                    return $cf_ip;
                 }
             }
+        }
+
+        if (filter_var($remote_ip, FILTER_VALIDATE_IP)) {
+            return $remote_ip;
         }
 
         return '0.0.0.0';

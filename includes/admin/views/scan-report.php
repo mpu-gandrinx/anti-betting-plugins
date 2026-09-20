@@ -19,12 +19,14 @@ $db_audit        = $last_scan['db_audit'] ?? [];
 $core_audit      = $last_scan['core_audit'] ?? [];
 $scope           = $last_scan['scope'] ?? [];
 $is_ai_scanned   = !empty($last_scan['ai_scanned']);
+$vuln_audit      = $last_scan['vuln_audit'] ?? [];
 
 $uploads_scanned = $stats['uploads_scanned'] ?? 0;
 $theme_scanned   = $stats['theme_scanned'] ?? 0;
 $ai_scanned_cnt  = $stats['ai_scanned'] ?? count($ai_audit);
 $core_scanned    = $stats['core_checked'] ?? count($core_audit);
 $db_scanned      = $stats['db_checked'] ?? count($db_audit);
+$vuln_scanned    = $stats['vuln_checked'] ?? count($vuln_audit);
 $baseline_cnt    = $stats['baseline_checked'] ?? (isset($baseline) ? count($baseline) : 0);
 
 $ai_model        = !empty($ai_audit[0]['model']) ? $ai_audit[0]['model'] : (get_option('ajs_ai_model', 'gpt-4o-mini'));
@@ -42,6 +44,14 @@ $ai_threats_cnt = 0;
 foreach ($ai_audit as $item) {
     if (!empty($item['is_threat'])) {
         $ai_threats_cnt++;
+    }
+}
+
+// Count Vulnerabilities
+$vuln_issues_cnt = 0;
+foreach ($vuln_audit as $va) {
+    if (($va['status'] ?? '') === 'VULNERABLE' || ($va['status'] ?? '') === 'WARNING') {
+        $vuln_issues_cnt++;
     }
 }
 ?>
@@ -105,6 +115,12 @@ foreach ($ai_audit as $item) {
 
     <!-- Metric Scope Cards -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px;">
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #ef4444; padding: 14px; border-radius: 4px;">
+            <div style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">🔍 Celah & Hardening</div>
+            <div style="font-size: 20px; font-weight: bold; color: #1e293b; margin-top: 4px;"><?php echo esc_html(number_format_i18n($vuln_scanned)); ?> <span style="font-size: 12px; font-weight: normal; color: #64748b;">indikator</span></div>
+            <div style="font-size: 11.5px; color: #475569; margin-top: 2px;"><?php echo $vuln_issues_cnt > 0 ? '<span style="color:#dc2626;font-weight:bold;">' . esc_html($vuln_issues_cnt) . ' perlu perbaikan</span>' : '<span style="color:#16a34a;">Sistem terlindungi</span>'; ?></div>
+        </div>
+
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #3b82f6; padding: 14px; border-radius: 4px;">
             <div style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">📁 Uploads Lokal</div>
             <div style="font-size: 20px; font-weight: bold; color: #1e293b; margin-top: 4px;"><?php echo esc_html(number_format_i18n($uploads_scanned)); ?> <span style="font-size: 12px; font-weight: normal; color: #64748b;">file</span></div>
@@ -147,6 +163,11 @@ foreach ($ai_audit as $item) {
         <button type="button" class="ajs-tab-btn active" data-target="ajs-tab-findings" style="padding: 10px 16px; border: none; background: none; font-weight: bold; font-size: 13.5px; color: #2563eb; border-bottom: 2px solid #2563eb; cursor: pointer; display: flex; align-items: center; gap: 6px;">
             <span class="dashicons dashicons-shield"></span> <?php esc_html_e('Temuan Keamanan', 'anti-judol-shield'); ?> 
             <span style="background: #fee2e2; color: #991b1b; padding: 1px 7px; border-radius: 9999px; font-size: 11px;"><?php echo esc_html($total_issues); ?></span>
+        </button>
+
+        <button type="button" class="ajs-tab-btn" data-target="ajs-tab-vuln" style="padding: 10px 16px; border: none; background: none; font-weight: 600; font-size: 13.5px; color: #64748b; border-bottom: 2px solid transparent; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+            <span class="dashicons dashicons-admin-tools"></span> <?php esc_html_e('Audit Celah & Hardening', 'anti-judol-shield'); ?> 
+            <span style="background: <?php echo $vuln_issues_cnt > 0 ? '#fee2e2; color: #991b1b;' : '#dcfce7; color: #166534;'; ?> padding: 1px 7px; border-radius: 9999px; font-size: 11px;"><?php echo esc_html($vuln_issues_cnt); ?></span>
         </button>
 
         <button type="button" class="ajs-tab-btn" data-target="ajs-tab-ai" style="padding: 10px 16px; border: none; background: none; font-weight: 600; font-size: 13.5px; color: #64748b; border-bottom: 2px solid transparent; cursor: pointer; display: flex; align-items: center; gap: 6px;">
@@ -547,6 +568,57 @@ foreach ($ai_audit as $item) {
                                 <?php else : ?>
                                     <span style="color:#64748b;">-</span>
                                 <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+
+    <!-- TAB: AUDIT CELAH & HARDENING -->
+    <div id="ajs-tab-vuln" class="ajs-tab-pane" style="display: none;">
+        <h4 style="margin: 0 0 6px 0; font-size: 14px;"><?php esc_html_e('Audit Titik Lemah & Celah Keamanan Sistem (Vulnerability & Hardening):', 'anti-judol-shield'); ?></h4>
+        <p style="font-size: 12.5px; color: #475569; margin: 0 0 14px 0;">
+            <?php esc_html_e('Mendeteksi celah pintu masuk yang sering dimanfaatkan peretas untuk menyusup berulang kali (plugin usang, izin file longgar, kebocoran berkas sensitif, dan editor tema aktif):', 'anti-judol-shield'); ?>
+        </p>
+
+        <?php if (empty($vuln_audit)) : ?>
+            <div style="background: #f8fafc; padding: 14px; border: 1px solid #e2e8f0; border-radius: 4px; color: #64748b; font-size: 13px;">
+                <em>Audit celah dan hardening telah dijalankan. Seluruh indikator berada dalam batas aman.</em>
+            </div>
+        <?php else : ?>
+            <table class="widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th style="width: 130px;">Status</th>
+                        <th style="width: 90px;">Tingkat</th>
+                        <th style="width: 240px;">Indikator Keamanan</th>
+                        <th>Penjelasan & Rekomendasi Hardening</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($vuln_audit as $va) : ?>
+                        <?php
+                        $st = strtoupper($va['status'] ?? 'SAFE');
+                        $bg = $st === 'SAFE' ? '#dcfce7' : ($st === 'VULNERABLE' ? '#fee2e2' : '#fef3c7');
+                        $tc = $st === 'SAFE' ? '#15803d' : ($st === 'VULNERABLE' ? '#991b1b' : '#92400e');
+                        $label = $st === 'SAFE' ? '✓ Aman' : ($st === 'VULNERABLE' ? '⚠ Celah Rentan' : '⚡ Peringatan');
+                        ?>
+                        <tr>
+                            <td>
+                                <span style="background: <?php echo esc_attr($bg); ?>; color: <?php echo esc_attr($tc); ?>; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 11.5px;">
+                                    <?php echo esc_html($label); ?>
+                                </span>
+                            </td>
+                            <td>
+                                <code><?php echo esc_html($va['severity'] ?? 'INFO'); ?></code>
+                            </td>
+                            <td>
+                                <strong><?php echo esc_html($va['item'] ?? '-'); ?></strong>
+                            </td>
+                            <td>
+                                <?php echo esc_html($va['detail'] ?? '-'); ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

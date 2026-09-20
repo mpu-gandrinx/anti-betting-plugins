@@ -15,16 +15,40 @@ class AJS_WAF {
     ];
 
     private array $dangerous_payloads = [
-        '/eval\s*\(/i',
+        // 1. RCE & Bahaya Eksekusi Perintah Sistem
+        '/(?:eval|assert|passthru|shell_exec|system|popen|proc_open|pcntl_exec)\s*\(/i',
         '/base64_decode\s*\(/i',
         '/gzinflate\s*\(/i',
+        '/gzuncompress\s*\(/i',
         '/str_rot13\s*\(/i',
-        '/shell_exec\s*\(/i',
-        '/passthru\s*\(/i',
-        '/system\s*\(/i',
-        '/assert\s*\(/i',
+        '/hex2bin\s*\(/i',
+        '/preg_replace\s*\(\s*["\'].*\/e["\']/i',
+        '/create_function\s*\(/i',
+        '/\b(?:call_user_func|call_user_func_array|array_map|array_filter|usort|uasort)\s*\(\s*[\'"]*(?:system|exec|passthru|shell_exec|assert|eval)/i',
+
+        // 2. Dynamic Variable Function & Backtick Execution
+        '/\$(?:_GET|_POST|_REQUEST|_COOKIE)\[[^\]]+\]\s*\(/i',
+        '/`[^`]*\$(?:_GET|_POST|_REQUEST|_COOKIE)[^`]*`/i',
+
+        // 3. PHP Protocol Wrappers (LFI/RFI/SSRF)
+        '/php:\/\/(?:input|filter|memory)/i',
+        '/data:\/\/(?:text\/plain|application)/i',
+        '/phar:\/\//i',
+        '/zip:\/\/.*#.*\.php/i',
+
+        // 4. Injeksi Tag PHP Terbuka / Polyglot Webshell
+        '/<\?php\s*(?:eval|base64_decode|assert|system|passthru|shell_exec|\$_)/is',
+        '/<\?=\s*(?:eval|base64_decode|assert|system|passthru|shell_exec|\$_)/is',
+
+        // 5. Pola SQL Injection Berbahaya
+        '/\b(?:union\s+(?:all\s+)?select|into\s+(?:dump|out)file|load_file\s*\(|benchmark\s*\(|sleep\s*\()\b/i',
+
+        // 6. Path Traversal & Directory Traversal
+        '/(?:\.\.[\/\\\\]|%2e%2e[\/\\\\]|%252e%252e[\/\\\\])/i',
+
+        // 7. Eksekusi File Skrip Berbahaya
         '/\b(?:phtml|php[34578]|phar)\b.*(?:upload|tmp)/i',
-        '/<\?php.*(eval|base64_decode|assert)/is'
+        '/\b(?:include|require)(?:_once)?\s*\(?\s*[\'"](?:https?|ftp|php|data):/i'
     ];
 
     public function __construct(?AJS_AI $ai = null) {
@@ -33,11 +57,19 @@ class AJS_WAF {
     }
 
     private function bind_hooks(): void {
-        add_action('init', [$this, 'inspect_request'], 1);
+        // Jalankan inspeksi sedini mungkin (plugins_loaded & init prioritas tertinggi)
+        add_action('plugins_loaded', [$this, 'inspect_request'], -9999);
+        add_action('init', [$this, 'inspect_request'], -9999);
+
+        // Filter proteksi upload berkas secara real-time
+        add_filter('wp_handle_upload_prefilter', [$this, 'inspect_file_upload']);
+
+        // Kunci akses editor berkas PHP bawaan dashboard WordPress
+        add_action('admin_init', [$this, 'block_file_editor_access']);
 
         if ((int)get_option('ajs_block_xmlrpc', 1) === 1) {
             add_filter('xmlrpc_enabled', '__return_false');
-            add_action('init', [$this, 'block_xmlrpc_endpoint'], 1);
+            add_action('init', [$this, 'block_xmlrpc_endpoint'], -9999);
         }
 
         if ((int)get_option('ajs_block_author_enum', 1) === 1) {
@@ -58,8 +90,9 @@ class AJS_WAF {
             add_filter('wp_insert_post_data', [$this, 'filter_post_content'], 10, 2);
         }
 
-        // Proteksi intersepsi pembuatan user admin ilegal tanpa sesi admin sah
+        // Proteksi intersepsi pembuatan & eskalasi role administrator ilegal
         add_action('user_register', [$this, 'guard_user_registration'], 1);
+        add_action('set_user_role', [$this, 'guard_user_role_change'], 1, 3);
 
         // Cloaking & SEO Poisoning redirect protection
         add_filter('wp_redirect', [$this, 'guard_redirects'], 1, 2);
@@ -114,41 +147,147 @@ class AJS_WAF {
             return;
         }
 
-        if (is_admin() && current_user_can('manage_options')) {
+        // Jangan blokir admin yang sudah terautentikasi resmi
+        if (function_exists('is_user_logged_in') && is_user_logged_in() && function_exists('current_user_can') && current_user_can('manage_options')) {
             return;
         }
 
-        $uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
-        $query_string = isset($_SERVER['QUERY_STRING']) ? sanitize_text_field(wp_unslash($_SERVER['QUERY_STRING'])) : '';
+        $uri          = isset($_SERVER['REQUEST_URI']) ? (string)$_SERVER['REQUEST_URI'] : '';
+        $query_string = isset($_SERVER['QUERY_STRING']) ? (string)$_SERVER['QUERY_STRING'] : '';
+        $user_agent   = isset($_SERVER['HTTP_USER_AGENT']) ? (string)$_SERVER['HTTP_USER_AGENT'] : '';
 
-        // 1. Inspect URI & Query String
-        $target = urldecode($uri . ' ' . $query_string);
+        // 1. Periksa URI & Query String (antisipasi double/nested encoding)
+        $target = urldecode(urldecode($uri . ' ' . $query_string));
         $matched_keyword = $this->check_judol_keywords($target);
         if ($matched_keyword) {
             $this->block_request('Judol Keyword in URL', $matched_keyword);
         }
 
-        // 2. Inspect Payload patterns in GET & POST
-        $raw_post = file_get_contents('php://input');
-        $check_data = array_merge($_GET, $_POST);
+        $matched_uri_payload = $this->check_malicious_payload($target);
+        if ($matched_uri_payload) {
+            $this->block_request('Malicious Payload in URI', $matched_uri_payload);
+        }
 
-        foreach ($check_data as $key => $val) {
-            $str_val = is_array($val) ? json_encode($val) : (string)$val;
+        // 2. Periksa User-Agent dari injeksi payload
+        if (!empty($user_agent)) {
+            $matched_ua = $this->check_malicious_payload($user_agent);
+            if ($matched_ua) {
+                $this->block_request('Malicious User-Agent Payload', $matched_ua);
+            }
+        }
+
+        // 3. Inspeksi Rekursif Parameter GET, POST, COOKIE, dan REQUEST
+        $sources = [
+            'GET'    => $_GET,
+            'POST'   => $_POST,
+            'COOKIE' => $_COOKIE,
+        ];
+
+        foreach ($sources as $source_name => $data) {
+            $this->inspect_array_recursively($data, $source_name);
+        }
+
+        // 4. Inspeksi Raw Request Body (php://input) untuk JSON/XML payload injeksi
+        $raw_post = @file_get_contents('php://input');
+        if (!empty($raw_post) && strlen($raw_post) < 200000) {
+            $matched_raw = $this->check_malicious_payload($raw_post);
+            if ($matched_raw) {
+                $this->block_request('Raw Body Code Injection', $matched_raw);
+            }
+            $matched_raw_kw = $this->check_judol_keywords($raw_post);
+            if ($matched_raw_kw) {
+                $this->block_request('Judol Raw Payload Body', $matched_raw_kw);
+            }
+        }
+    }
+
+    private function inspect_array_recursively($data, string $prefix = '', int $depth = 0): void {
+        if ($depth > 5 || empty($data) || !is_array($data)) {
+            return;
+        }
+
+        foreach ($data as $key => $val) {
+            $current_key = $prefix ? "{$prefix}[{$key}]" : (string)$key;
+
+            if (is_array($val)) {
+                $this->inspect_array_recursively($val, $current_key, $depth + 1);
+                continue;
+            }
+
+            $str_val = (string)$val;
+            if (strlen($str_val) < 2) {
+                continue;
+            }
+
             $matched_payload = $this->check_malicious_payload($str_val);
             if ($matched_payload) {
-                $this->block_request('Malicious Code Injection', $matched_payload);
+                $this->block_request("Malicious Code Injection in {$current_key}", $matched_payload);
             }
 
             $matched_kw = $this->check_judol_keywords($str_val);
             if ($matched_kw) {
-                $this->block_request('Judol Payload Parameter', $matched_kw);
+                $this->block_request("Judol Payload in {$current_key}", $matched_kw);
+            }
+        }
+    }
+
+    public function inspect_file_upload(array $file): array {
+        $name = $file['name'] ?? '';
+        $tmp  = $file['tmp_name'] ?? '';
+
+        // Blokir ekstensi berbahaya dan double-extension (contoh: shell.php.jpg)
+        $dangerous_exts = [
+            'php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'php8',
+            'phps', 'phar', 'shtml', 'cgi', 'pl', 'py', 'sh', 'asp', 'aspx', 'htaccess'
+        ];
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+
+        if (in_array($ext, $dangerous_exts, true) || preg_match('/\.(?:php[34578]?|phtml|phar)\./i', $name)) {
+            $ip = $this->get_client_ip();
+            $this->log_security_event($ip, 'Malicious File Upload Blocked', "Filename: {$name}");
+            $this->block_request('Malicious Executable Upload Attempt', "File: {$name}");
+        }
+
+        // Inspeksi mendalam (deep inspection) isi file: cari tag eksekusi PHP pada upload gambar/dokumen
+        if (!empty($tmp) && file_exists($tmp) && is_readable($tmp)) {
+            $handle = @fopen($tmp, 'rb');
+            if ($handle) {
+                $bytes = (string)@fread($handle, 4096);
+                @fclose($handle);
+                if (preg_match('/<\?(?:php|=)/i', $bytes) || stripos($bytes, '<script language="php"') !== false) {
+                    $ip = $this->get_client_ip();
+                    $this->log_security_event($ip, 'Embedded PHP in Upload Blocked', "Filename: {$name}");
+                    $this->block_request('Polyglot Webshell Upload Detected', "Embedded PHP in {$name}");
+                }
             }
         }
 
-        if (!empty($raw_post)) {
-            $matched_raw = $this->check_malicious_payload($raw_post);
-            if ($matched_raw) {
-                $this->block_request('Raw Body Code Injection', $matched_raw);
+        return $file;
+    }
+
+    public function block_file_editor_access(): void {
+        if (!defined('DISALLOW_FILE_EDIT')) {
+            define('DISALLOW_FILE_EDIT', true);
+        }
+        global $pagenow;
+        if ($pagenow === 'theme-editor.php' || $pagenow === 'plugin-editor.php') {
+            wp_die(
+                esc_html__('Akses Ditolak: Editor berkas tema & plugin dinonaktifkan oleh Anti-Judol Shield demi keamanan situs.', 'anti-judol-shield'),
+                'Access Denied',
+                ['response' => 403]
+            );
+        }
+    }
+
+    public function guard_user_role_change(int $user_id, string $role, array $old_roles): void {
+        if ($role === 'administrator') {
+            if (!is_user_logged_in() || !current_user_can('manage_options')) {
+                $user = get_userdata($user_id);
+                if ($user) {
+                    $user->set_role('subscriber');
+                }
+                $ip = $this->get_client_ip();
+                $this->block_request('Unauthorized Administrator Escalation', "User #{$user_id} promoted to admin without valid authorization.");
             }
         }
     }
@@ -339,11 +478,27 @@ class AJS_WAF {
         $ip = $this->get_client_ip();
         $this->log_security_event($ip, $reason, $payload);
 
+        // Auto-ban IP penyerang langsung ke daftar hitam IPS (24 jam)
+        if ($ip !== '127.0.0.1' && $ip !== '::1' && $ip !== '0.0.0.0') {
+            $whitelist = (string)get_option('ajs_ip_whitelist', '');
+            $whitelisted_ips = array_filter(array_map('trim', explode("\n", $whitelist)));
+            if (!in_array($ip, $whitelisted_ips, true)) {
+                $banned = (array)get_option('ajs_banned_ips_list', []);
+                $duration = (int)get_option('ajs_ips_ban_duration', 86400);
+                $banned[$ip] = [
+                    'reason'     => 'Firewall Auto-Drop: ' . $reason,
+                    'banned_at'  => current_time('mysql'),
+                    'expires_at' => date('Y-m-d H:i:s', time() + $duration),
+                ];
+                update_option('ajs_banned_ips_list', $banned);
+            }
+        }
+
         // Send instant notification for critical intrusions
-        if (stripos($reason, 'Injection') !== false || stripos($reason, 'Cloaked') !== false || stripos($reason, 'Lockout') !== false) {
+        if (stripos($reason, 'Injection') !== false || stripos($reason, 'Cloaked') !== false || stripos($reason, 'Lockout') !== false || stripos($reason, 'Upload') !== false || stripos($reason, 'Escalation') !== false) {
             AJS_Notifications::send_alert(
-                "Ancaman Diblokir: {$reason}",
-                "IP: {$ip}\nReason: {$reason}\nPayload: " . substr($payload, 0, 200),
+                "Firewall Dropped Threat: {$reason}",
+                "IP Penyerang: {$ip} (Otomatis Diblokir)\nReason: {$reason}\nPayload: " . substr($payload, 0, 200),
                 'CRITICAL'
             );
         }
@@ -368,10 +523,10 @@ class AJS_WAF {
 </head>
 <body>
     <div class="card">
-        <h1>403 Akses Ditolak</h1>
-        <p>Aktivitas jaringan Anda memicu sistem pertahanan <strong>Anti-Judol Shield WAF</strong>. Permintaan diblokir demi keamanan integritas web.</p>
+        <h1>403 Akses Ditolak oleh Firewall</h1>
+        <p>Aktivitas jaringan Anda memicu sistem pertahanan <strong>Anti-Judol Shield WAF</strong>. Akses diblokir dan IP Anda telah dimasukkan ke daftar isolasi keamanan.</p>
         <div class="badge">IP: ' . esc_html($ip) . ' | Event: ' . esc_html($reason) . '</div>
-        <div class="footer">Protected by Anti-Judol Shield &bull; BPTSI</div>
+        <div class="footer">Protected by Anti-Judol Shield &bull; BPTSI Active Defense</div>
     </div>
 </body>
 </html>';
@@ -398,22 +553,44 @@ class AJS_WAF {
         );
     }
 
-    public function get_client_ip(): string {
-        $ip_keys = [
-            'HTTP_CF_CONNECTING_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'HTTP_CLIENT_IP',
-            'REMOTE_ADDR'
+    public function is_cloudflare_ip(string $ip): bool {
+        $cf_ranges = [
+            '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+            '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+            '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+            '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
         ];
+        $ip_long = ip2long($ip);
+        if ($ip_long === false) {
+            return false;
+        }
+        foreach ($cf_ranges as $range) {
+            list($net, $mask) = explode('/', $range);
+            $net_long = ip2long($net);
+            $mask_long = ~((1 << (32 - (int)$mask)) - 1);
+            if (($ip_long & $mask_long) === ($net_long & $mask_long)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        foreach ($ip_keys as $key) {
-            if (!empty($_SERVER[$key])) {
-                $ips = explode(',', $_SERVER[$key]);
-                $ip = trim($ips[0]);
-                if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                    return $ip;
+    public function get_client_ip(): string {
+        $remote_ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+
+        // Hanya percaya HTTP_CF_CONNECTING_IP jika request valid dari Cloudflare atau token disetel
+        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+            $cf_token = get_option('ajs_cf_api_token', '');
+            if (!empty($cf_token) || $this->is_cloudflare_ip($remote_ip)) {
+                $cf_ip = trim($_SERVER['HTTP_CF_CONNECTING_IP']);
+                if (filter_var($cf_ip, FILTER_VALIDATE_IP)) {
+                    return $cf_ip;
                 }
             }
+        }
+
+        if (filter_var($remote_ip, FILTER_VALIDATE_IP)) {
+            return $remote_ip;
         }
 
         return '0.0.0.0';

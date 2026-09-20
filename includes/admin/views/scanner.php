@@ -135,12 +135,13 @@ if (isset($_GET['settings_saved'])) {
             <!-- Step Badges / Pills -->
             <div id="ajs-step-indicators" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;">
                 <span class="ajs-step-pill" data-step="init">1. Storage & NFS</span>
-                <span class="ajs-step-pill" data-step="scan_uploads">2. Uploads Scan</span>
-                <span class="ajs-step-pill" data-step="scan_theme">3. Tema, Plugin & Backdoor</span>
-                <span class="ajs-step-pill" data-step="scan_ai">4. AI Deep Screening</span>
-                <span class="ajs-step-pill" data-step="verify_integrity">5. Golden Baseline</span>
-                <span class="ajs-step-pill" data-step="scan_database">6. Database & User Audit</span>
-                <span class="ajs-step-pill" data-step="scan_core">7. WP Core Checksums</span>
+                <span class="ajs-step-pill" data-step="scan_vuln">2. Audit Celah & Hardening</span>
+                <span class="ajs-step-pill" data-step="scan_uploads">3. Uploads Scan</span>
+                <span class="ajs-step-pill" data-step="scan_theme">4. Tema, Plugin & Backdoor</span>
+                <span class="ajs-step-pill" data-step="scan_ai">5. AI Deep Screening</span>
+                <span class="ajs-step-pill" data-step="verify_integrity">6. Golden Baseline</span>
+                <span class="ajs-step-pill" data-step="scan_database">7. Database & User Audit</span>
+                <span class="ajs-step-pill" data-step="scan_core">8. WP Core Checksums</span>
             </div>
 
             <!-- Terminal Console Log -->

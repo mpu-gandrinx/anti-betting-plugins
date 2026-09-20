@@ -160,4 +160,4 @@ final class Anti_Judol_Shield {
 
 add_action('plugins_loaded', function() {
     Anti_Judol_Shield::instance();
-}, 0);
+}, -99999);

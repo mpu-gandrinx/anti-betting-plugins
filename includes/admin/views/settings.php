@@ -30,6 +30,15 @@ if (!defined('ABSPATH')) {
                 </td>
             </tr>
             <tr>
+                <th scope="row"><?php esc_html_e('Firewall Upload & Blokir PHP di Uploads', 'anti-judol-shield'); ?></th>
+                <td>
+                    <label>
+                        <input type="checkbox" name="ajs_block_uploads_php" value="1" <?php checked(1, get_option('ajs_block_uploads_php', 1)); ?>>
+                        <?php esc_html_e('Blokir upload file skrip berbahaya (.php, .phtml, polyglot) dan pasang proteksi eksekusi di direktori wp-content/uploads/.', 'anti-judol-shield'); ?>
+                    </label>
+                </td>
+            </tr>
+            <tr>
                 <th scope="row"><?php esc_html_e('Blokir XML-RPC', 'anti-judol-shield'); ?></th>
                 <td>
                     <label>

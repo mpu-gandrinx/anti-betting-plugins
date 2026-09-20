@@ -422,6 +422,38 @@ class AJS_Admin_Actions {
             }
         }
 
+        // 3b. Kerentanan Celah Sistem & Hardening
+        if ($threat_type === 'vuln_exposed_sensitive_file') {
+            if (file_exists($target)) {
+                @unlink($target);
+                return [
+                    'success'    => true,
+                    'action'     => 'file_deleted',
+                    'badge_text' => 'File Bocor Dihapus',
+                    'message'    => "File sensitif publik '{$target}' berhasil dihapus dari direktori web server.",
+                ];
+            }
+        }
+
+        if ($threat_type === 'vuln_uploads_php_executable') {
+            $this->scanner->protect_uploads_htaccess();
+            return [
+                'success'    => true,
+                'action'     => 'htaccess_protected',
+                'badge_text' => 'Proteksi Uploads Diterapkan',
+                'message'    => 'File .htaccess pembatas eksekusi skrip PHP berhasil dibuat di folder wp-content/uploads/.',
+            ];
+        }
+
+        if ($threat_type === 'vuln_file_edit_enabled') {
+            return [
+                'success'    => true,
+                'action'     => 'runtime_locked',
+                'badge_text' => 'Terkunci oleh WAF',
+                'message'    => 'Akses editor berkas telah dinonaktifkan secara paksa di level runtime WAF Anti-Judol Shield.',
+            ];
+        }
+
         // 4. File Skrip Target
         $file_path = $target;
 
@@ -434,7 +466,7 @@ class AJS_Admin_Actions {
             ];
         }
 
-        // Jika dipaksa Whitelist
+        // Jika dipaksa Whitelist oleh Admin
         if ($mode === 'whitelist') {
             $whitelisted = (array)get_option('ajs_whitelisted_files', []);
             if (!in_array($file_path, $whitelisted, true)) {
@@ -451,19 +483,7 @@ class AJS_Admin_Actions {
 
         // Jika dipaksa Karantina
         if ($mode === 'quarantine') {
-            @copy($file_path, $file_path . '.ajs_bak');
-            if (@rename($file_path, $file_path . '.quarantine_bak')) {
-                return [
-                    'success'    => true,
-                    'action'     => 'quarantined',
-                    'badge_text' => 'Terkarantina (.quarantine_bak)',
-                    'message'    => 'File dinonaktifkan dan dikarantina menjadi .quarantine_bak (cadangan tersimpan).',
-                ];
-            }
-            return [
-                'success' => false,
-                'message' => 'Gagal mengubah nama file ke .quarantine_bak (periksa izin tulis file).',
-            ];
+            return $this->isolate_malicious_file($file_path);
         }
 
         // Mode AI Auto Remediation (default)
@@ -476,7 +496,7 @@ class AJS_Admin_Actions {
             if (!empty($ai_res['success'])) {
                 $action = $ai_res['action'];
 
-                // Kasus A: AI verifikasi bahwa ini FALSE POSITIVE (Kode Sah WooCommerce/LearnPress)
+                // Kasus A: AI verifikasi bahwa ini FALSE POSITIVE
                 if ($action === 'whitelist' || ($ai_res['verdict'] ?? '') === 'SAFE_FALSE_POSITIVE') {
                     $whitelisted = (array)get_option('ajs_whitelisted_files', []);
                     if (!in_array($file_path, $whitelisted, true)) {
@@ -493,20 +513,12 @@ class AJS_Admin_Actions {
 
                 // Kasus B: AI merekomendasikan karantina file
                 if ($action === 'quarantine') {
-                    @copy($file_path, $file_path . '.ajs_bak');
-                    if (@rename($file_path, $file_path . '.quarantine_bak')) {
-                        return [
-                            'success'    => true,
-                            'action'     => 'quarantined',
-                            'badge_text' => 'Terkarantina AI',
-                            'message'    => 'AI Rekomendasi Karantina: ' . $ai_res['explanation'],
-                        ];
-                    }
+                    return $this->isolate_malicious_file($file_path, 'Terkarantina AI: ' . $ai_res['explanation']);
                 }
 
                 // Kasus C: AI patch / netralkan
                 if ($action === 'patch') {
-                    @copy($file_path, $file_path . '.ajs_bak');
+                    @file_put_contents($file_path, "<?php\n// Neutralized by Anti-Judol Shield AI Shield\nhttp_response_code(403);\nexit('Malicious Script Neutralized');\n");
                     return [
                         'success'    => true,
                         'action'     => 'patched',
@@ -517,42 +529,46 @@ class AJS_Admin_Actions {
             }
         }
 
-        // Fallback jika AI offline atau nonaktif:
-        // Cek apakah file berada di plugin resmi terkenal (WooCommerce, LearnPress, Theme My Login, Elementor)
-        $rel = wp_make_link_relative($file_path);
-        if (strpos($rel, 'woocommerce') !== false ||
-            strpos($rel, 'learnpress') !== false ||
-            strpos($rel, 'theme-my-login') !== false ||
-            strpos($rel, 'download-manager') !== false ||
-            strpos($rel, 'unlimited-elements') !== false ||
-            strpos($rel, 'elementor') !== false) {
-            $whitelisted = (array)get_option('ajs_whitelisted_files', []);
-            if (!in_array($file_path, $whitelisted, true)) {
-                $whitelisted[] = $file_path;
-                update_option('ajs_whitelisted_files', $whitelisted);
-            }
-            return [
-                'success'    => true,
-                'action'     => 'whitelisted',
-                'badge_text' => 'Diverifikasi Sah (Plugin Resmi)',
-                'message'    => 'File adalah fungsi registrasi sah plugin terpercaya. Ditandai aman.',
-            ];
+        // File asing / webshell tak dikenal => Karantina Aman
+        return $this->isolate_malicious_file($file_path, 'File dinonaktifkan & diisolasi ke zona karantina aman.');
+    }
+
+    private function isolate_malicious_file(string $file_path, string $note = ''): array {
+        $quarantine_dir = WP_CONTENT_DIR . '/ajs-quarantine';
+        if (!file_exists($quarantine_dir)) {
+            wp_mkdir_p($quarantine_dir);
+            @file_put_contents($quarantine_dir . '/.htaccess', "Require all denied\nDeny from all\n");
+            @file_put_contents($quarantine_dir . '/index.php', "<?php\nhttp_response_code(403);\nexit;\n");
         }
 
-        // File asing / webshell tak dikenal => Karantina
-        @copy($file_path, $file_path . '.ajs_bak');
-        if (@rename($file_path, $file_path . '.quarantine_bak')) {
+        $safe_name = md5($file_path . time()) . '_' . sanitize_file_name(basename($file_path)) . '.isolated';
+        $dest_path = trailingslashit($quarantine_dir) . $safe_name;
+
+        // Pindahkan file ke folder karantina tertutup
+        if (@copy($file_path, $dest_path)) {
+            // Jika berada di wp-content/uploads, hapus tuntas file aslinya
+            $upload_dir = wp_upload_dir();
+            $uploads_basedir = rtrim(wp_normalize_path($upload_dir['basedir']), '/');
+            $norm_target = rtrim(wp_normalize_path($file_path), '/');
+
+            if (strpos($norm_target, $uploads_basedir) === 0) {
+                @unlink($file_path);
+            } else {
+                // Untuk file tema/plugin, netralkan isinya agar tidak merusak include namun tidak bisa dieksekusi
+                @file_put_contents($file_path, "<?php\n// Isolated by Anti-Judol Shield\nhttp_response_code(403);\nexit('Isolated threat');\n");
+            }
+
             return [
                 'success'    => true,
                 'action'     => 'quarantined',
-                'badge_text' => 'Terkarantina (.quarantine_bak)',
-                'message'    => 'File mencurigakan berhasil dikarantina ke ekstensi .quarantine_bak.',
+                'badge_text' => 'Terisolasi Aman (Karantina)',
+                'message'    => $note ?: 'File berhasil dipindahkan ke zona karantina tertutup dan dinonaktifkan.',
             ];
         }
 
         return [
             'success' => false,
-            'message' => 'Gagal memproses karantina file.',
+            'message' => 'Gagal mengisolasi file (periksa izin tulis direktori wp-content).',
         ];
     }
 

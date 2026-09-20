@@ -148,10 +148,10 @@ if (isset($_GET['settings_saved'])) {
             <div style="margin-bottom: 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
                     <span style="font-size: 12px; font-weight: 600; color: #475569;">Log Aktivitas Pemindaian Real-Time:</span>
-                    <span style="font-size: 11px; color: #64748b;">(Auto-scroll aktif)</span>
+                    <span style="font-size: 11px; color: #64748b;">(Auto-scroll aktif &bull; status detail per langkah)</span>
                 </div>
-                <div id="ajs-scan-console" style="background: #0f172a; color: #38bdf8; font-family: Consolas, Monaco, 'Courier New', monospace; font-size: 12px; padding: 12px 14px; border-radius: 6px; height: 160px; overflow-y: auto; line-height: 1.6; border: 1px solid #1e293b; box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);">
-                    <div>[<?php echo esc_html(current_time('H:i:s')); ?>] Menunggu sesi pemindaian diinisialisasi...</div>
+                <div id="ajs-scan-console" style="background: #0b0f19; color: #38bdf8; font-family: 'SFMono-Regular', Consolas, Monaco, 'Courier New', monospace; font-size: 12px; padding: 14px 16px; border-radius: 6px; height: 240px; overflow-y: auto; line-height: 1.7; border: 1px solid #1e293b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
+                    <div style="color: #64748b;">[<?php echo esc_html(current_time('H:i:s')); ?>] [0%] Konsol scanner siaga. Menunggu sesi pemindaian dimulai...</div>
                 </div>
             </div>
 
@@ -207,6 +207,7 @@ if (isset($_GET['settings_saved'])) {
             var liveFindings = document.getElementById('ajs-live-findings');
             var liveSkipped = document.getElementById('ajs-live-skipped');
 
+            var currentProgressVal = 0;
             var ajaxUrl = <?php echo json_encode(admin_url('admin-ajax.php')); ?>;
             var ajaxNonce = <?php echo json_encode(wp_create_nonce('ajs_ajax_scan_nonce')); ?>;
 
@@ -219,8 +220,29 @@ if (isset($_GET['settings_saved'])) {
 
             function appendLog(msg, color) {
                 var line = document.createElement('div');
-                if (color) line.style.color = color;
-                line.textContent = '[' + getTimeStamp() + '] ' + msg;
+                line.style.padding = '2px 0';
+                line.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+
+                if (!color) {
+                    if (msg.indexOf('Peringatan') !== -1 || msg.indexOf('Celah') !== -1 || msg.indexOf('Bahaya') !== -1 || msg.indexOf('Kritis') !== -1 || msg.indexOf('gagal') !== -1) {
+                        color = '#f87171';
+                    } else if (msg.indexOf('AI') !== -1 || msg.indexOf('Model') !== -1 || msg.indexOf('Screening') !== -1) {
+                        color = '#c084fc';
+                    } else if (msg.indexOf('Aman') !== -1 || msg.indexOf('Bersih') !== -1 || msg.indexOf('100%') !== -1 || msg.indexOf('Valid') !== -1 || msg.indexOf('Cocok') !== -1 || msg.indexOf('Selesai') !== -1) {
+                        color = '#4ade80';
+                    } else if (msg.indexOf('Memulai') !== -1 || msg.indexOf('Memindai') !== -1 || msg.indexOf('Memeriksa') !== -1 || msg.indexOf('Deteksi') !== -1 || msg.indexOf('Inisialisasi') !== -1) {
+                        color = '#38bdf8';
+                    } else {
+                        color = '#e2e8f0';
+                    }
+                }
+                line.style.color = color;
+
+                var text = msg;
+                if (!/^\[\d+%\]/.test(text)) {
+                    text = '[' + currentProgressVal + '%] ' + text;
+                }
+                line.textContent = '[' + getTimeStamp() + '] ' + text;
                 consoleBox.appendChild(line);
                 consoleBox.scrollTop = consoleBox.scrollHeight;
             }
@@ -262,8 +284,9 @@ if (isset($_GET['settings_saved'])) {
                     startBtn.innerHTML = '<span class="dashicons dashicons-update ajs-spin" style="margin-top:4px;"></span> Sedang Memindai...';
                 }
 
+                currentProgressVal = 5;
                 consoleBox.innerHTML = '';
-                appendLog('Inisialisasi pemindaian keamanan...');
+                appendLog('[5%] Inisialisasi sesi pemindaian keamanan baru...');
 
                 var scanId = 'scan_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
 
@@ -294,6 +317,7 @@ if (isset($_GET['settings_saved'])) {
                         }
 
                         var data = res.data;
+                        currentProgressVal = data.progress;
 
                         progressBar.style.width = data.progress + '%';
                         progressBar.textContent = data.progress + '%';

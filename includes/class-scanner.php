@@ -496,14 +496,14 @@ class AJS_Scanner {
                 $session_data['start_micro']   = microtime(true);
 
                 $logs = [
-                    'Memulai sesi pemindaian baru...',
-                    'Konfigurasi: Auto-Heal (' . ($auto_heal ? 'Aktif' : 'Nonaktif') . ') | AI Deep Screening (' . ($ai_deep_scan ? 'Aktif' : 'Nonaktif') . ')',
+                    '[10%] Menginisialisasi sesi pemindaian keamanan baru (Session ID: ' . $scan_id . ')...',
+                    '[12%] Memeriksa konfigurasi: Auto-Heal (' . ($auto_heal ? 'Aktif' : 'Nonaktif') . ') | AI Deep Screening (' . ($ai_deep_scan ? 'Aktif' : 'Nonaktif') . ')',
                 ];
 
                 if ($skip_nfs && !empty($network_mounts)) {
-                    $logs[] = 'Deteksi storage jaringan: Terdeteksi ' . count($network_mounts) . ' mount point NFS/CIFS (otomatis dilewati).';
+                    $logs[] = '[15%] Deteksi storage jaringan: Ditemukan ' . count($network_mounts) . ' mount point NFS/CIFS (otomatis dilewati).';
                 } else {
-                    $logs[] = 'Storage server: Menggunakan filesystem lokal.';
+                    $logs[] = '[15%] Deteksi storage: Memindai drive penyimpanan lokal server.';
                 }
 
                 $response['next_step']   = 'scan_vuln';
@@ -514,16 +514,25 @@ class AJS_Scanner {
 
             case 'scan_vuln':
                 $logs = [];
+                $logs[] = '[18%] Memulai audit celah keamanan & konfigurasi hardening server...';
+                $logs[] = '[20%] Memeriksa file wp-config.php (DISALLOW_FILE_EDIT, WP_DEBUG_DISPLAY, dan Secret Salt Keys)...';
+                $logs[] = '[22%] Memeriksa izin berkas (permissions) dan mendeteksi berkas sensitif publik (.env, .git, .sql, .bak)...';
+                $logs[] = '[23%] Memeriksa status proteksi PHP di folder wp-content/uploads/ dan update plugin resmi...';
+
                 $before_count = count($session_data['findings']);
                 $this->scan_vulnerabilities($session_data['findings'], $session_data['vuln_audit']);
                 $found_here = count($session_data['findings']) - $before_count;
                 $session_data['stats']['vuln_checked'] = count($session_data['vuln_audit']);
 
-                $logs[] = "Audit Celah & Kerentanan: " . count($session_data['vuln_audit']) . " indikator keamanan diperiksa.";
+                if ($ai_deep_scan && $this->ai && $this->ai->is_configured()) {
+                    $logs[] = '[24%] AI CISO Analysis: Mengirim profil konfigurasi server ke model ' . esc_html($this->ai->get_model()) . ' untuk evaluasi celah...';
+                }
+
+                $logs[] = "[25%] Audit Celah Selesai: " . count($session_data['vuln_audit']) . " indikator keamanan diperiksa.";
                 if ($found_here > 0) {
-                    $logs[] = "Peringatan Celah: Ditemukan {$found_here} kelemahan sistem / konfigurasi yang belum di-hardening!";
+                    $logs[] = "[25%] Peringatan Celah: Ditemukan {$found_here} kelemahan sistem / konfigurasi yang belum di-hardening!";
                 } else {
-                    $logs[] = "Konfigurasi sistem & wp-config.php memenuhi standar hardening aman.";
+                    $logs[] = "[25%] Konfigurasi sistem & wp-config.php memenuhi standar hardening aman.";
                 }
 
                 $response['next_step']   = 'scan_uploads';
@@ -534,6 +543,8 @@ class AJS_Scanner {
 
             case 'scan_uploads':
                 $logs = [];
+                $logs[] = '[28%] Memulai pemindaian direktori uploads (wp-content/uploads/)...';
+                $logs[] = '[32%] Memindai file media untuk mendeteksi backdoor, webshell, dan skrip PHP tersembunyi...';
                 $skip_reason = '';
 
                 if ($skip_uploads) {
@@ -541,13 +552,13 @@ class AJS_Scanner {
                         'path'   => $uploads_path,
                         'reason' => 'Dilewati seluruhnya (Opsi lewati folder uploads aktif).',
                     ];
-                    $logs[] = 'Lewati uploads: Direktori uploads diabaikan sesuai preferensi admin.';
+                    $logs[] = '[40%] Lewati uploads: Direktori uploads diabaikan sesuai preferensi admin.';
                 } elseif ($this->is_path_excluded($uploads_path, $excluded_rules, $network_mounts, $skip_nfs, $skip_reason)) {
                     $session_data['skipped_paths'][] = [
                         'path'   => $uploads_path,
                         'reason' => 'Dilewati: ' . $skip_reason,
                     ];
-                    $logs[] = 'Lewati uploads: ' . $skip_reason;
+                    $logs[] = '[40%] Lewati uploads: ' . $skip_reason;
                 } elseif (is_dir($uploads_path)) {
                     $before_count   = count($session_data['findings']);
                     $before_skipped = count($session_data['skipped_paths']);
@@ -557,28 +568,29 @@ class AJS_Scanner {
                     $found_here   = count($session_data['findings']) - $before_count;
                     $skipped_here = count($session_data['skipped_paths']) - $before_skipped;
 
-                    $logs[] = "Pemindaian uploads: {$session_data['stats']['uploads_scanned']} file diperiksa.";
+                    $logs[] = "[40%] Pemindaian uploads: {$session_data['stats']['uploads_scanned']} berkas selesai diperiksa.";
 
                     if ($skipped_here > 0) {
-                        $logs[] = "Proteksi storage: {$skipped_here} subfolder NFS/pengecualian di dalam uploads berhasil dilewati.";
+                        $logs[] = "[42%] Proteksi storage: {$skipped_here} subfolder NFS/pengecualian di dalam uploads berhasil dilewati.";
                     }
                     if ($found_here > 0) {
-                        $logs[] = "Peringatan: Terdeteksi {$found_here} file skrip mencurigakan di folder uploads!";
+                        $logs[] = "[45%] Peringatan Kritis: Terdeteksi {$found_here} file skrip mencurigakan di folder uploads!";
                     } else {
-                        $logs[] = 'Direktori uploads lokal bersih dari skrip ilegal (.php/.phtml).';
+                        $logs[] = '[45%] Direktori uploads lokal bersih dari skrip ilegal (.php/.phtml).';
                     }
                 } else {
-                    $logs[] = 'Direktori uploads tidak ditemukan di server.';
+                    $logs[] = '[45%] Direktori uploads tidak ditemukan di server.';
                 }
 
                 $response['next_step']   = 'scan_theme';
-                $response['progress']    = 40;
+                $response['progress']    = 45;
                 $response['status_text'] = 'Pemindaian direktori uploads selesai. Memindai tema aktif, plugins & backdoor...';
                 $response['logs']        = $logs;
                 break;
 
             case 'scan_theme':
                 $logs = [];
+                $logs[] = '[48%] Memulai inspeksi source code pada tema aktif, plugin, dan mu-plugins...';
                 $before_count = count($session_data['findings']);
                 if (!isset($session_data['suspicious_files']) || !is_array($session_data['suspicious_files'])) {
                     $session_data['suspicious_files'] = [];
@@ -588,73 +600,77 @@ class AJS_Scanner {
                 if (is_dir($theme_dir)) {
                     $theme_name = basename($theme_dir);
                     $this->scan_directory_for_signatures($theme_dir, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
-                    $logs[] = "Pemindaian tema aktif ({$theme_name}): {$session_data['stats']['theme_scanned']} file PHP diperiksa.";
+                    $logs[] = "[52%] Pemindaian tema aktif ({$theme_name}): {$session_data['stats']['theme_scanned']} file PHP diperiksa.";
                 }
 
                 // 2. Scan Tema Induk jika ada
                 $parent_theme = get_template_directory();
                 if ($parent_theme !== $theme_dir && is_dir($parent_theme)) {
                     $this->scan_directory_for_signatures($parent_theme, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
-                    $logs[] = "Pemindaian tema induk (" . basename($parent_theme) . ") selesai.";
+                    $logs[] = "[56%] Pemindaian tema induk (" . basename($parent_theme) . ") selesai diperiksa.";
                 }
 
                 // 3. Scan Must-Use Plugins (vektor umum backdoor)
                 $mu_plugins = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : (WP_CONTENT_DIR . '/mu-plugins');
                 if (is_dir($mu_plugins)) {
                     $this->scan_directory_for_signatures($mu_plugins, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
-                    $logs[] = "Pemindaian must-use plugins (wp-content/mu-plugins) selesai.";
+                    $logs[] = "[60%] Pemindaian must-use plugins (wp-content/mu-plugins) selesai diperiksa.";
                 }
 
                 // 4. Scan Direktori Plugins
                 if (defined('WP_PLUGIN_DIR') && is_dir(WP_PLUGIN_DIR)) {
                     $this->scan_directory_for_signatures(WP_PLUGIN_DIR, $session_data['findings'], $session_data['skipped_paths'], $session_data['stats']['theme_scanned'], $session_data['suspicious_files']);
-                    $logs[] = "Pemindaian direktori plugins (wp-content/plugins) selesai.";
+                    $logs[] = "[62%] Pemindaian direktori plugins (wp-content/plugins) selesai diperiksa.";
                 }
 
                 // 5. Scan File PHP Root WordPress (ABSPATH)
                 $this->scan_root_php_files($session_data['findings'], $session_data['suspicious_files'], $session_data['stats']['theme_scanned']);
-                $logs[] = "Verifikasi file skrip PHP di direktori root WordPress selesai.";
+                $logs[] = "[64%] Verifikasi file skrip PHP di direktori root WordPress selesai.";
 
                 $found_here = count($session_data['findings']) - $before_count;
                 if ($found_here > 0) {
-                    $logs[] = "Peringatan: Terdeteksi {$found_here} indikasi webshell/backdoor pembuat user ilegal!";
+                    $logs[] = "[65%] Peringatan: Terdeteksi {$found_here} indikasi webshell/backdoor pembuat user ilegal!";
                 } else {
-                    $logs[] = "Tema, plugins, mu-plugins, dan file root bersih dari signature backdoor.";
+                    $logs[] = "[65%] Tema, plugins, mu-plugins, dan file root bersih dari signature backdoor.";
                 }
 
                 $has_ai = $ai_deep_scan && $this->ai && $this->ai->is_configured();
                 $response['next_step']   = $has_ai ? 'scan_ai' : 'verify_integrity';
-                $response['progress']    = 60;
-                $response['status_text'] = $has_ai ? 'Memulai AI Deep Screening pada file mencurigakan & artikel...' : 'Memeriksa integritas file Golden Baseline...';
+                $response['progress']    = 65;
+                $response['status_text'] = $has_ai ? 'Memulai AI Deep Screening pada source code mencurigakan & artikel...' : 'Memeriksa integritas file Golden Baseline...';
                 $response['logs']        = $logs;
                 break;
 
             case 'scan_ai':
                 $logs = [];
+                $logs[] = '[68%] Menyiapkan AI Deep Code & Content Screening Engine...';
                 if ($this->ai && $this->ai->is_configured()) {
                     $before_count = count($session_data['findings']);
 
                     // 1. Analisis AI pada file skrip mencurigakan / kandidat backdoor
                     $suspicious_files = $session_data['suspicious_files'] ?? [];
                     if (!empty($suspicious_files)) {
-                        $logs[] = "AI Deep Screening: Mengirim " . count($suspicious_files) . " sampel potongan kode mencurigakan ke model " . esc_html($this->ai->get_model()) . " untuk deteksi backdoor/user injection...";
+                        $logs[] = "[70%] AI Deep Screening: Mengirim " . count($suspicious_files) . " sampel potongan source code ke model " . esc_html($this->ai->get_model()) . " untuk deteksi backdoor/user injection...";
                         $this->scan_suspicious_files_with_ai($suspicious_files, $session_data['findings'], $session_data['ai_audit']);
+                    } else {
+                        $logs[] = '[70%] AI Code Screening: Tidak ada potongan kode mencurigakan yang memerlukan evaluasi AI lanjutan.';
                     }
 
                     // 2. Analisis AI pada artikel & postingan
+                    $logs[] = '[72%] AI Screening: Menganalisis konten artikel publik dari sisipan promosi judi online terselubung...';
                     $this->scan_posts_for_judol($session_data['findings'], $auto_heal, $session_data['ai_audit']);
                     $found_here = count($session_data['findings']) - $before_count;
                     $session_data['stats']['ai_scanned'] = count($session_data['ai_audit']);
 
-                    $logs[] = "AI Screening Selesai: " . count($session_data['ai_audit']) . " item (skrip & artikel) diperiksa oleh model " . esc_html($this->ai->get_model()) . ".";
+                    $logs[] = "[74%] AI Screening Selesai: " . count($session_data['ai_audit']) . " item (source code & artikel) selesai dianalisis model " . esc_html($this->ai->get_model()) . ".";
 
                     if ($found_here > 0) {
-                        $logs[] = "Peringatan AI: Terkonfirmasi {$found_here} ancaman baru melalui penalaran AI!";
+                        $logs[] = "[75%] Peringatan AI: Terkonfirmasi {$found_here} ancaman baru melalui penalaran AI!";
                     } else {
-                        $logs[] = 'AI Screening: Seluruh sampel kode dan artikel yang diperiksa bersih/aman.';
+                        $logs[] = '[75%] AI Screening: Seluruh sampel source code dan artikel yang diuji dinyatakan aman.';
                     }
                 } else {
-                    $logs[] = 'AI Screening dilewati (modul AI belum dikonfigurasi).';
+                    $logs[] = '[75%] AI Screening dilewati (modul AI belum diaktifkan/dikonfigurasi).';
                 }
 
                 $response['next_step']   = 'verify_integrity';
@@ -665,6 +681,8 @@ class AJS_Scanner {
 
             case 'verify_integrity':
                 $logs = [];
+                $logs[] = '[78%] Memulai verifikasi integritas Golden Baseline (anti-deface)...';
+                $logs[] = '[82%] Menghitung hash SHA-256 berkas kritis (index.php, .htaccess, header.php, functions.php)...';
                 $healed_files = $this->verify_and_auto_heal();
                 $session_data['stats']['baseline_checked'] = count($this->get_critical_files());
 
@@ -679,9 +697,9 @@ class AJS_Scanner {
                 }
 
                 if (!empty($healed_files)) {
-                    $logs[] = 'Auto-Heal: ' . count($healed_files) . ' file terdeface berhasil dipulihkan ke baseline bersih!';
+                    $logs[] = '[85%] Auto-Heal: ' . count($healed_files) . ' berkas terdeface berhasil dipulihkan ke kondisi bersih!';
                 } else {
-                    $logs[] = 'Golden Baseline utuh: File utama (index.php, .htaccess, header.php) identik dengan snapshot bersih.';
+                    $logs[] = '[85%] Golden Baseline utuh: Seluruh berkas inti identik dengan golden snapshot bersih.';
                 }
 
                 $response['next_step']   = 'scan_database';
@@ -692,17 +710,19 @@ class AJS_Scanner {
 
             case 'scan_database':
                 $logs = [];
+                $logs[] = '[87%] Memulai audit database: tabel wp_options, akun wp_users, dan wp-cron...';
+                $logs[] = '[89%] Menjalankan pencarian LIKE pattern untuk konten judol & script di wp_options...';
                 $before_count = count($session_data['findings']);
                 $this->scan_database_options($session_data['findings'], $session_data['db_audit']);
                 $found_here = count($session_data['findings']) - $before_count;
                 $session_data['stats']['db_checked'] = count($session_data['db_audit']);
 
-                $logs[] = "Database scan: " . count($session_data['db_audit']) . " pemeriksaan (options, registrasi publik, & akun administrator) dijalankan.";
+                $logs[] = "[91%] Database scan: " . count($session_data['db_audit']) . " pemeriksaan (options, registrasi pengguna, & akun admin) tuntas dijalankan.";
 
                 if ($found_here > 0) {
-                    $logs[] = "Peringatan: Ditemukan {$found_here} anomali/opsi mencurigakan pada database!";
+                    $logs[] = "[92%] Peringatan: Ditemukan {$found_here} anomali/opsi mencurigakan pada database!";
                 } else {
-                    $logs[] = 'Tabel opsi database & pengaturan registrasi pengguna bersih dari manipulasi.';
+                    $logs[] = '[92%] Tabel opsi database, tugas WP-Cron, & akun pengguna bersih dari manipulasi.';
                 }
 
                 $response['next_step']   = 'scan_core';
@@ -713,17 +733,19 @@ class AJS_Scanner {
 
             case 'scan_core':
                 $logs = [];
+                $logs[] = '[94%] Menghubungkan ke API resmi WordPress.org Core Checksums...';
+                $logs[] = '[95%] Memvalidasi hash MD5 berkas inti WordPress terhadap rilis resmi...';
                 $before_count = count($session_data['findings']);
                 $this->scan_wordpress_core_checksums($session_data['findings'], $session_data['core_audit']);
                 $found_here = count($session_data['findings']) - $before_count;
                 $session_data['stats']['core_checked'] = count($session_data['core_audit']);
 
-                $logs[] = "WordPress.org Checksums: " . count($session_data['core_audit']) . " file inti diverifikasi ke API resmi.";
+                $logs[] = "[96%] WordPress.org Checksums: " . count($session_data['core_audit']) . " berkas inti diverifikasi.";
 
                 if ($found_here > 0) {
-                    $logs[] = "Peringatan Kritis: {$found_here} file resmi WordPress Core gagal verifikasi MD5!";
+                    $logs[] = "[97%] Peringatan Kritis: {$found_here} berkas resmi WordPress Core gagal verifikasi MD5!";
                 } else {
-                    $logs[] = 'Official Core Checksums valid: Seluruh file inti WordPress cocok dengan rilis resmi WordPress.org.';
+                    $logs[] = '[97%] Official Core Checksums valid: Seluruh berkas inti WordPress cocok dengan rilis resmi WordPress.org.';
                 }
 
                 $response['next_step']   = 'finalize';
@@ -758,8 +780,9 @@ class AJS_Scanner {
                 update_option('ajs_last_scan_result', $scan_record);
 
                 $logs = [
-                    'Pemindaian menyeluruh berhasil diselesaikan dalam ' . $duration . ' detik!',
-                    'Hasil: ' . count($session_data['findings']) . ' masalah terdeteksi | ' . count($session_data['skipped_paths']) . ' path storage jaringan/dikecualikan dilewati.',
+                    '[99%] Mengkompilasi laporan komprehensif hasil pemindaian dan riwayat audit...',
+                    '[100%] Pemindaian menyeluruh 100% selesai dalam ' . $duration . ' detik!',
+                    '[100%] Ringkasan Akhir: ' . count($session_data['findings']) . ' masalah terdeteksi | ' . count($session_data['skipped_paths']) . ' path storage dilewati.',
                 ];
 
                 $response['next_step']   = null;
@@ -935,6 +958,50 @@ class AJS_Scanner {
                     'message'  => "Plugin usang terdeteksi ({$plugin_name}). Eksploitasi celah plugin usang (unauthenticated file upload/SQLi) adalah penyebab utama situs di-hack berulang kali.",
                     'healed'   => false,
                 ];
+            }
+        }
+
+        // 6. Analisis Celah Keamanan & Postur Server Berbasis AI (AI CISO Audit)
+        if ($this->ai && $this->ai->is_configured()) {
+            $server_profile = [
+                'server_software'    => $_SERVER['SERVER_SOFTWARE'] ?? 'Unknown',
+                'php_version'        => PHP_VERSION,
+                'php_sapi'           => PHP_SAPI,
+                'os'                 => PHP_OS_FAMILY,
+                'wp_version'         => get_bloginfo('version'),
+                'disallow_file_edit' => defined('DISALLOW_FILE_EDIT') ? DISALLOW_FILE_EDIT : false,
+                'disallow_file_mods' => defined('DISALLOW_FILE_MODS') ? DISALLOW_FILE_MODS : false,
+                'wp_debug_display'   => defined('WP_DEBUG_DISPLAY') ? WP_DEBUG_DISPLAY : false,
+                'has_default_salts'  => $has_default_salts,
+                'wp_config_perms'    => $perms ?? '0644',
+                'uploads_protected'  => $has_htaccess_block,
+                'exposed_files'      => array_keys(array_filter($sensitive_targets, function($file) {
+                    return file_exists(ABSPATH . $file);
+                })),
+                'outdated_plugins'   => !empty($plugin_updates->response) ? array_keys($plugin_updates->response) : [],
+                'users_can_register' => (int)get_option('users_can_register', 0),
+                'default_role'       => (string)get_option('default_role', 'subscriber'),
+            ];
+
+            $ai_vuln_res = $this->ai->inspect_server_vulnerabilities($server_profile);
+
+            $vuln_audit[] = [
+                'item'     => 'AI CISO Server Posture Audit',
+                'status'   => (!empty($ai_vuln_res['is_vulnerable']) || ($ai_vuln_res['risk_level'] ?? '') === 'CRITICAL' || ($ai_vuln_res['risk_level'] ?? '') === 'HIGH') ? 'VULNERABLE' : 'SAFE',
+                'severity' => $ai_vuln_res['risk_level'] ?? 'HIGH',
+                'detail'   => 'Penilaian AI (' . esc_html($this->ai->get_model()) . '): ' . ($ai_vuln_res['summary'] ?? 'Analisis selesai.'),
+            ];
+
+            if (!empty($ai_vuln_res['loopholes'])) {
+                foreach ($ai_vuln_res['loopholes'] as $lh) {
+                    $findings[] = [
+                        'type'     => 'ai_server_vulnerability',
+                        'severity' => strtoupper($lh['severity'] ?? 'HIGH'),
+                        'file'     => 'Server & Config: ' . ($lh['issue'] ?? 'Celah Keamanan Server'),
+                        'message'  => 'AI CISO Analysis: ' . ($lh['recommendation'] ?? ($lh['issue'] ?? '')),
+                        'healed'   => false,
+                    ];
+                }
             }
         }
     }
@@ -1494,7 +1561,38 @@ class AJS_Scanner {
     }
 
     private function scan_suspicious_files_with_ai(array $suspicious_files, array &$findings, array &$ai_audit = []): void {
-        if (!$this->ai || !$this->ai->is_configured() || empty($suspicious_files)) {
+        if (!$this->ai || !$this->ai->is_configured()) {
+            return;
+        }
+
+        // Sertakan berkas source code inti tema (functions.php, header.php) untuk deep inspection jika belum ada
+        $theme_dir = get_stylesheet_directory();
+        $core_candidates = [
+            $theme_dir . '/functions.php',
+            $theme_dir . '/header.php',
+            $theme_dir . '/footer.php',
+        ];
+
+        foreach ($core_candidates as $cc) {
+            if (file_exists($cc) && count($suspicious_files) < 15) {
+                $already = false;
+                foreach ($suspicious_files as $sf) {
+                    if (($sf['path'] ?? '') === $cc) {
+                        $already = true;
+                        break;
+                    }
+                }
+                if (!$already) {
+                    $suspicious_files[] = [
+                        'path'      => $cc,
+                        'snippet'   => (string)@file_get_contents($cc),
+                        'signature' => 'Core Theme Source Code (AI Deep Audit)',
+                    ];
+                }
+            }
+        }
+
+        if (empty($suspicious_files)) {
             return;
         }
 
@@ -1513,7 +1611,7 @@ class AJS_Scanner {
                 continue;
             }
 
-            $ai_check  = $this->ai->inspect_code($snippet, $file_path);
+            $ai_check  = $this->ai->inspect_source_code_deep($snippet, $file_path);
             $is_threat = !empty($ai_check['is_threat']);
 
             if ($is_threat) {
@@ -1522,7 +1620,7 @@ class AJS_Scanner {
                 foreach ($findings as &$f) {
                     if (($f['file'] ?? '') === $file_path) {
                         $f['message'] .= ' (Analisis AI: ' . ($ai_check['reason'] ?? 'Backdoor terverifikasi') . ')';
-                        $f['severity'] = 'CRITICAL';
+                        $f['severity'] = strtoupper($ai_check['severity'] ?? 'CRITICAL');
                         $updated = true;
                         break;
                     }
@@ -1532,9 +1630,9 @@ class AJS_Scanner {
                 if (!$updated) {
                     $findings[] = [
                         'type'     => 'ai_backdoor_detected',
-                        'severity' => 'CRITICAL',
+                        'severity' => strtoupper($ai_check['severity'] ?? 'CRITICAL'),
                         'file'     => $file_path,
-                        'message'  => 'AI Screening mendeteksi backdoor: ' . ($ai_check['reason'] ?? 'Ancaman kode berbahaya'),
+                        'message'  => 'AI Source Code Audit: ' . ($ai_check['reason'] ?? 'Ancaman kode berbahaya terdeteksi'),
                         'healed'   => false,
                     ];
                 }
@@ -1557,10 +1655,10 @@ class AJS_Scanner {
                 'word_count'     => str_word_count($snippet),
                 'char_length'    => strlen($snippet),
                 'sample_snippet' => mb_substr($snippet, 0, 250) . (strlen($snippet) > 250 ? '...' : ''),
-                'system_prompt'  => $ai_check['system_prompt'] ?? $this->ai->get_code_system_prompt(),
-                'user_prompt'    => $ai_check['user_prompt'] ?? '',
-                'model'          => $ai_check['model'] ?? $this->ai->get_model(),
-                'endpoint'       => $ai_check['endpoint'] ?? $this->ai->get_endpoint(),
+                'system_prompt'  => $this->ai->get_code_system_prompt(),
+                'user_prompt'    => "Target: " . wp_make_link_relative($file_path) . "\n\n" . mb_substr($snippet, 0, 300),
+                'model'          => $this->ai->get_model(),
+                'endpoint'       => $this->ai->get_endpoint(),
                 'is_threat'      => $is_threat,
                 'reason'         => $ai_check['reason'] ?? 'Aman',
                 'raw_reply'      => $ai_check['raw_reply'] ?? '',
